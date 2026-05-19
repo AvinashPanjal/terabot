@@ -48,4 +48,5 @@ next-env.d.ts
 /scraper/*.png
 /scraper/*.html
 /scraper/*.txt
+!/scraper/requirements.txt
 
