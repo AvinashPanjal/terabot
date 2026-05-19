@@ -155,6 +155,38 @@ async def startup_event():
 async def root():
     return {"status": "healthy", "service": "terabox-downloader"}
 
+@app.get("/api/status")
+async def status():
+    import socket
+    
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(1.0)
+    bot_api_running = False
+    try:
+        result = sock.connect_ex(('127.0.0.1', 8081))
+        if result == 0:
+            bot_api_running = True
+    except Exception:
+        pass
+    finally:
+        sock.close()
+        
+    log_content = ""
+    try:
+        if os.path.exists("/tmp/telegram-bot-api.log"):
+            with open("/tmp/telegram-bot-api.log", "r") as f:
+                log_content = f.read()[-5000:]
+        else:
+            log_content = "Log file /tmp/telegram-bot-api.log does not exist."
+    except Exception as e:
+        log_content = f"Error reading log: {e}"
+        
+    return {
+        "bot_api_running_port_8081": bot_api_running,
+        "log_tail": log_content,
+        "env_variables": {k: v for k, v in os.environ.items() if "TOKEN" not in k and "HASH" not in k and "API" not in k}
+    }
+
 @app.post("/api/extract")
 async def extract_url(req: ExtractRequest):
     url = req.url
