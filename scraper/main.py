@@ -441,9 +441,14 @@ async def download_file(
     if local_file:
         # Prevent path traversal attacks by getting just the basename
         safe_filename = os.path.basename(local_file)
-        file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), safe_filename)
+        file_path = os.path.join("/tmp", safe_filename)
         if not os.path.exists(file_path):
-            raise HTTPException(status_code=404, detail="File not found")
+            # Fallback to local directory
+            fallback_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), safe_filename)
+            if os.path.exists(fallback_path):
+                file_path = fallback_path
+            else:
+                raise HTTPException(status_code=404, detail="File not found")
             
         # Set up a background task to delete the file after it is served
         from fastapi import BackgroundTasks

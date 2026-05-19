@@ -132,7 +132,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 await status_msg.edit_text("⏳ Downloading video securely to server...")
 
-                temp_filename = f"temp_{update.message.message_id}.mp4"
+                temp_filename = f"/tmp/temp_{update.message.message_id}.mp4"
                 
                 if ".m3u8" in direct_url or "type=M3U8" in direct_url:
                     await status_msg.edit_text("⏳ Stitching video chunks with yt-dlp... (This might take a minute)")
@@ -145,11 +145,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE
                     )
-                    stdout, stderr = await process.communicate()
-                    
-                    if process.returncode != 0:
-                        error_msg = stderr.decode() if stderr else "Unknown error"
-                        await status_msg.edit_text(f"❌ yt-dlp failed to stitch the video:\n`{error_msg[-500:]}`", parse_mode="Markdown")
+                    try:
+                        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300.0)
+                        if process.returncode != 0:
+                            error_msg = stderr.decode() if stderr else "Unknown error"
+                            await status_msg.edit_text(f"❌ yt-dlp failed to stitch the video:\n`{error_msg[-500:]}`", parse_mode="Markdown")
+                            continue
+                    except asyncio.TimeoutError:
+                        try:
+                            process.kill()
+                        except:
+                            pass
+                        await status_msg.edit_text("❌ Video stitching with yt-dlp timed out after 5 minutes.")
                         continue
                         
                     file_size = os.path.getsize(temp_filename)
@@ -192,25 +199,74 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             )
                             continue
 
+                        total_bytes = int(content_length) if content_length else 0
+                        downloaded_bytes = 0
+                        last_update_time = asyncio.get_event_loop().time()
+
                         with open(temp_filename, "wb") as f:
-                            async for chunk in stream_res.aiter_bytes(chunk_size=8192):
+                            async for chunk in stream_res.aiter_bytes(chunk_size=16384):
                                 f.write(chunk)
+                                downloaded_bytes += len(chunk)
+                                
+                                # Update progress message every 4 seconds to avoid Telegram rate limits
+                                current_time = asyncio.get_event_loop().time()
+                                if current_time - last_update_time > 4.0:
+                                    last_update_time = current_time
+                                    percent = (downloaded_bytes / total_bytes * 100) if total_bytes else 0
+                                    mb_downloaded = downloaded_bytes / 1000000
+                                    mb_total = total_bytes / 1000000
+                                    progress_text = (
+                                        f"⏳ Downloading video securely to server...\n"
+                                        f"`[{'█' * int(percent // 10)}{'░' * (10 - int(percent // 10))}]` {percent:.1f}%\n"
+                                        f"🔹 {mb_downloaded:.1f} MB / {mb_total:.1f} MB"
+                                    )
+                                    try:
+                                        await status_msg.edit_text(progress_text, parse_mode="Markdown")
+                                    except Exception:
+                                        pass
                 
                 await status_msg.edit_text("🚀 Uploading to Telegram...")
 
-                with open(temp_filename, "rb") as video_file:
-                    await update.message.reply_video(
-                        video=video_file,
-                        caption=f"🎥 Downloaded Successfully!\nLink: {url}"
-                    )
+                abs_filepath = os.path.abspath(temp_filename)
+                local_api_url = os.getenv("TELEGRAM_LOCAL_API_URL")
+                
+                if local_api_url:
+                    try:
+                        # In local mode, pass the absolute path of the file as a string.
+                        # This tells the local Bot API server to read the file directly from disk.
+                        await update.message.reply_video(
+                            video=abs_filepath,
+                            caption=f"🎥 Downloaded Successfully!\nLink: {url}",
+                            write_timeout=300,
+                            read_timeout=300
+                        )
+                    except Exception as local_err:
+                        print(f"Local file sending failed: {local_err}. Trying direct upload...")
+                        with open(temp_filename, "rb") as video_file:
+                            await update.message.reply_video(
+                                video=video_file,
+                                caption=f"🎥 Downloaded Successfully!\nLink: {url}",
+                                write_timeout=300,
+                                read_timeout=300
+                            )
+                else:
+                    with open(temp_filename, "rb") as video_file:
+                        await update.message.reply_video(
+                            video=video_file,
+                            caption=f"🎥 Downloaded Successfully!\nLink: {url}",
+                            write_timeout=300,
+                            read_timeout=300
+                        )
                 
                 await status_msg.delete()
-                os.remove(temp_filename)
+                if os.path.exists(temp_filename):
+                    os.remove(temp_filename)
 
         except Exception as e:
             await status_msg.edit_text(f"❌ An error occurred: {str(e)}")
-            if os.path.exists(f"temp_{update.message.message_id}.mp4"):
-                os.remove(f"temp_{update.message.message_id}.mp4")
+            temp_path = f"/tmp/temp_{update.message.message_id}.mp4"
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
 
 def main():
     if not TELEGRAM_BOT_TOKEN:
