@@ -15,6 +15,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 PORT = os.getenv("PORT", "8000")
 API_ENDPOINT = f"http://127.0.0.1:{PORT}/api/extract"
 PUBLIC_URL = os.getenv("RENDER_EXTERNAL_URL") or f"http://localhost:{PORT}"
+MAX_FILE_SIZE = 2000000000 if os.getenv("TELEGRAM_LOCAL_API_URL") else 50000000
 
 # Regex to find Terabox domains
 TERABOX_REGEX = r"https?:\/\/(www\.)?(terabox\.com|teraboxapp\.com|1024tera\.com|nephobox\.com|4funbox\.com|mirrobox\.com|momerybox\.com|teraboxlink\.com|terafileshare\.com)[^\s]+"
@@ -152,12 +153,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         continue
                         
                     file_size = os.path.getsize(temp_filename)
-                    if file_size > 50000000:
+                    if file_size > MAX_FILE_SIZE:
                         encoded_filename = quote(filename)
                         download_link = f"{PUBLIC_URL}/api/download?local_file={temp_filename}&filename={encoded_filename}"
                         await status_msg.edit_text(
                             f"⚠️ **File is too large to send directly on Telegram ({file_size/1000000:.1f} MB)**\n"
-                            f"Telegram limits bots to sending files under 50MB.\n\n"
+                            f"Telegram limits bots to sending files under {MAX_FILE_SIZE/1000000:.0f}MB.\n\n"
                             f"👉 You can download it directly here:\n"
                             f"📥 [Download Video]({download_link})",
                             parse_mode="Markdown"
@@ -175,7 +176,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             continue
                             
                         content_length = stream_res.headers.get("Content-Length")
-                        if content_length and int(content_length) > 50000000:
+                        if content_length and int(content_length) > MAX_FILE_SIZE:
                             mb_size = int(content_length) / 1000000
                             encoded_url = quote(direct_url)
                             encoded_filename = quote(filename)
@@ -184,7 +185,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             
                             await status_msg.edit_text(
                                 f"⚠️ **File is too large to send directly on Telegram ({mb_size:.1f} MB)**\n"
-                                f"Telegram limits bots to sending files under 50MB.\n\n"
+                                f"Telegram limits bots to sending files under {MAX_FILE_SIZE/1000000:.0f}MB.\n\n"
                                 f"👉 You can download it directly here:\n"
                                 f"📥 [Download Video]({download_link})",
                                 parse_mode="Markdown"
@@ -217,7 +218,12 @@ def main():
         return
 
     print("Starting Telegram Bot...")
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    local_api_url = os.getenv("TELEGRAM_LOCAL_API_URL")
+    if local_api_url:
+        print(f"Using Local Bot API Server: {local_api_url}")
+        app = Application.builder().token(TELEGRAM_BOT_TOKEN).base_url(f"{local_api_url}/bot").build()
+    else:
+        app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("login", login))
