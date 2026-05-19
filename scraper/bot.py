@@ -10,7 +10,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-API_ENDPOINT = "http://127.0.0.1:8000/api/extract"
+PORT = os.getenv("PORT", "8000")
+API_ENDPOINT = f"http://127.0.0.1:{PORT}/api/extract"
 
 # Regex to find Terabox domains
 TERABOX_REGEX = r"https?:\/\/(www\.)?(terabox\.com|teraboxapp\.com|1024tera\.com|nephobox\.com|4funbox\.com|mirrobox\.com|momerybox\.com|teraboxlink\.com|terafileshare\.com)[^\s]+"
