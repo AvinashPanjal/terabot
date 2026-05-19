@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install -y \
     g++ \
     libssl-dev \
     zlib1g-dev \
+    gperf \
+    php-cli \
     && rm -rf /var/lib/apt/lists/*
 
 RUN git clone --recursive https://github.com/tdlib/telegram-bot-api.git \
