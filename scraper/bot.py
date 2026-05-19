@@ -91,6 +91,72 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.close()
     await update.message.reply_text("👋 You have successfully unlinked your TeraBox account from this bot.")
 
+async def download_file_concurrently(url, headers, file_path, status_msg, total_bytes, num_connections=8):
+    import math
+    chunk_size = math.ceil(total_bytes / num_connections)
+    downloaded_bytes = [0] * num_connections
+    last_update = [asyncio.get_event_loop().time()]
+    
+    async def download_part(part_index):
+        start = part_index * chunk_size
+        end = min(start + chunk_size - 1, total_bytes - 1)
+        if start > end:
+            return
+            
+        part_headers = headers.copy()
+        part_headers["Range"] = f"bytes={start}-{end}"
+        part_file_path = f"{file_path}.part{part_index}"
+        
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            async with client.stream("GET", url, headers=part_headers) as res:
+                if res.status_code not in (200, 206):
+                    raise Exception(f"Part {part_index} failed with status {res.status_code}")
+                
+                with open(part_file_path, "wb") as pf:
+                    async for chunk in res.aiter_bytes(chunk_size=16384):
+                        pf.write(chunk)
+                        downloaded_bytes[part_index] += len(chunk)
+                        
+                        total_downloaded = sum(downloaded_bytes)
+                        current_time = asyncio.get_event_loop().time()
+                        if current_time - last_update[0] > 4.0:
+                            last_update[0] = current_time
+                            percent = (total_downloaded / total_bytes * 100) if total_bytes else 0
+                            mb_downloaded = total_downloaded / 1000000
+                            mb_total = total_bytes / 1000000
+                            progress_text = (
+                                f"⚡ **Downloading with Multi-Connection (Speed Boost Active)**...\n"
+                                f"`[{'█' * int(percent // 10)}{'░' * (10 - int(percent // 10))}]` {percent:.1f}%\n"
+                                f"🔹 {mb_downloaded:.1f} MB / {mb_total:.1f} MB"
+                            )
+                            try:
+                                await status_msg.edit_text(progress_text, parse_mode="Markdown")
+                            except Exception:
+                                pass
+
+    try:
+        tasks = [download_part(i) for i in range(num_connections)]
+        await asyncio.gather(*tasks)
+        
+        # Concatenate parts
+        with open(file_path, "wb") as outfile:
+            for i in range(num_connections):
+                part_file_path = f"{file_path}.part{i}"
+                if os.path.exists(part_file_path):
+                    with open(part_file_path, "rb") as infile:
+                        outfile.write(infile.read())
+                    os.remove(part_file_path)
+    except Exception as e:
+        # Clean up any partial files
+        for i in range(num_connections):
+            part_file_path = f"{file_path}.part{i}"
+            if os.path.exists(part_file_path):
+                try:
+                    os.remove(part_file_path)
+                except:
+                    pass
+        raise e
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text or update.message.caption
     if not text:
@@ -141,6 +207,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         'yt-dlp', direct_url, 
                         '--add-header', 'Referer: https://www.terabox.app/', 
                         '--add-header', f'Cookie: {cookies}', 
+                        '--concurrent-fragments', '8',
                         '-o', temp_filename,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE
@@ -177,53 +244,77 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "Cookie": cookies,
                         "Referer": "https://www.terabox.app/"
                     }
-                    async with client.stream("GET", direct_url, headers=headers_dl) as stream_res:
-                        if stream_res.status_code != 200:
-                            await status_msg.edit_text(f"❌ Failed to download video stream (HTTP {stream_res.status_code})")
-                            continue
-                            
-                        content_length = stream_res.headers.get("Content-Length")
-                        if content_length and int(content_length) > MAX_FILE_SIZE:
-                            mb_size = int(content_length) / 1000000
-                            encoded_url = quote(direct_url)
-                            encoded_filename = quote(filename)
-                            encoded_cookies = quote(cookies)
-                            download_link = f"{PUBLIC_URL}/api/download?url={encoded_url}&filename={encoded_filename}&cookies={encoded_cookies}"
-                            
-                            await status_msg.edit_text(
-                                f"⚠️ **File is too large to send directly on Telegram ({mb_size:.1f} MB)**\n"
-                                f"Telegram limits bots to sending files under {MAX_FILE_SIZE/1000000:.0f}MB.\n\n"
-                                f"👉 You can download it directly here:\n"
-                                f"📥 [Download Video]({download_link})",
-                                parse_mode="Markdown"
-                            )
-                            continue
+                    
+                    content_length = None
+                    try:
+                        head_headers = headers_dl.copy()
+                        head_headers["Range"] = "bytes=0-0"
+                        head_res = await client.get(direct_url, headers=head_headers, timeout=10.0)
+                        if head_res.status_code in (200, 206):
+                            content_length_str = head_res.headers.get("Content-Range")
+                            if content_length_str and "/" in content_length_str:
+                                content_length = int(content_length_str.split("/")[-1])
+                            else:
+                                content_length = int(head_res.headers.get("Content-Length", 0))
+                    except Exception as head_err:
+                        print(f"Error checking content length: {head_err}")
 
-                        total_bytes = int(content_length) if content_length else 0
-                        downloaded_bytes = 0
-                        last_update_time = asyncio.get_event_loop().time()
+                    if content_length and content_length > MAX_FILE_SIZE:
+                        mb_size = content_length / 1000000
+                        encoded_url = quote(direct_url)
+                        encoded_filename = quote(filename)
+                        encoded_cookies = quote(cookies)
+                        download_link = f"{PUBLIC_URL}/api/download?url={encoded_url}&filename={encoded_filename}&cookies={encoded_cookies}"
+                        
+                        await status_msg.edit_text(
+                            f"⚠️ **File is too large to send directly on Telegram ({mb_size:.1f} MB)**\n"
+                            f"Telegram limits bots to sending files under {MAX_FILE_SIZE/1000000:.0f}MB.\n\n"
+                            f"👉 You can download it directly here:\n"
+                            f"📥 [Download Video]({download_link})",
+                            parse_mode="Markdown"
+                        )
+                        continue
 
-                        with open(temp_filename, "wb") as f:
-                            async for chunk in stream_res.aiter_bytes(chunk_size=16384):
-                                f.write(chunk)
-                                downloaded_bytes += len(chunk)
+                    # If file is > 10MB, download concurrently for speed boost!
+                    if content_length and content_length > 10000000:
+                        await download_file_concurrently(
+                            url=direct_url,
+                            headers=headers_dl,
+                            file_path=temp_filename,
+                            status_msg=status_msg,
+                            total_bytes=content_length,
+                            num_connections=12  # 12 concurrent connections for ultra-fast download
+                        )
+                    else:
+                        async with client.stream("GET", direct_url, headers=headers_dl) as stream_res:
+                            if stream_res.status_code != 200:
+                                await status_msg.edit_text(f"❌ Failed to download video stream (HTTP {stream_res.status_code})")
+                                continue
                                 
-                                # Update progress message every 4 seconds to avoid Telegram rate limits
-                                current_time = asyncio.get_event_loop().time()
-                                if current_time - last_update_time > 4.0:
-                                    last_update_time = current_time
-                                    percent = (downloaded_bytes / total_bytes * 100) if total_bytes else 0
-                                    mb_downloaded = downloaded_bytes / 1000000
-                                    mb_total = total_bytes / 1000000
-                                    progress_text = (
-                                        f"⏳ Downloading video securely to server...\n"
-                                        f"`[{'█' * int(percent // 10)}{'░' * (10 - int(percent // 10))}]` {percent:.1f}%\n"
-                                        f"🔹 {mb_downloaded:.1f} MB / {mb_total:.1f} MB"
-                                    )
-                                    try:
-                                        await status_msg.edit_text(progress_text, parse_mode="Markdown")
-                                    except Exception:
-                                        pass
+                            total_bytes = int(stream_res.headers.get("Content-Length", 0)) or content_length or 0
+                            downloaded_bytes = 0
+                            last_update_time = asyncio.get_event_loop().time()
+
+                            with open(temp_filename, "wb") as f:
+                                async for chunk in stream_res.aiter_bytes(chunk_size=16384):
+                                    f.write(chunk)
+                                    downloaded_bytes += len(chunk)
+                                    
+                                    current_time = asyncio.get_event_loop().time()
+                                    if current_time - last_update_time > 4.0:
+                                        last_update_time = current_time
+                                        percent = (downloaded_bytes / total_bytes * 100) if total_bytes else 0
+                                        mb_downloaded = downloaded_bytes / 1000000
+                                        mb_total = total_bytes / 1000000
+                                        progress_text = (
+                                            f"⏳ Downloading video securely to server...\n"
+                                            f"`[{'█' * int(percent // 10)}{'░' * (10 - int(percent // 10))}]` {percent:.1f}%\n"
+                                            f"🔹 {mb_downloaded:.1f} MB / {mb_total:.1f} MB"
+                                        )
+                                        try:
+                                            await status_msg.edit_text(progress_text, parse_mode="Markdown")
+                                        except Exception:
+                                            pass
                 
                 await status_msg.edit_text("🚀 Uploading to Telegram...")
 
