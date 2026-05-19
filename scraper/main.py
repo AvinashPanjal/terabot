@@ -212,8 +212,15 @@ async def extract_url(req: ExtractRequest):
             context = await p.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 headless=True,
-                args=["--autoplay-policy=no-user-gesture-required", "--mute-audio"],
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                args=[
+                    "--autoplay-policy=no-user-gesture-required", 
+                    "--mute-audio",
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-web-security"
+                ],
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
             )
             
             if req_ndus:
@@ -259,9 +266,19 @@ async def extract_url(req: ExtractRequest):
 
             await page.route("**/*", handle_request)
 
-            print(f"Navigating to {url} ...")
+            # Pre-resolve redirects to bypass middleman domain timeouts
+            target_url = url
             try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as client:
+                    resp = await client.get(url)
+                    target_url = str(resp.url)
+                    print(f"Pre-resolved {url} to {target_url}")
+            except Exception as e:
+                print(f"Could not pre-resolve redirect: {e}")
+
+            print(f"Navigating to {target_url} ...")
+            try:
+                await page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
                 print("Page loaded.")
             except Exception as e:
                 print(f"Playwright error during goto: {e}")
