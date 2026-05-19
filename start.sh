@@ -1,10 +1,15 @@
 #!/bin/bash
 
 # Ensure we have the required API credentials
-if [ -z "$TELEGRAM_API_ID" ] || [ -z "$TELEGRAM_API_HASH" ]; then
-    echo "ERROR: TELEGRAM_API_ID and TELEGRAM_API_HASH environment variables are required!"
+if [ -z "$TELEGRAM_API_ID" ] || [ -z "$TELEGRAM_API_HASH" ] || [ -z "$TELEGRAM_BOT_TOKEN" ]; then
+    echo "ERROR: TELEGRAM_API_ID, TELEGRAM_API_HASH, and TELEGRAM_BOT_TOKEN environment variables are required!"
     exit 1
 fi
+
+# Log out the bot from the official Telegram API servers to prevent conflicts
+echo "Logging out bot from official Telegram servers..."
+curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/logOut"
+echo ""
 
 # Create directory for Telegram Bot API storage in /tmp (writable by anyone)
 mkdir -p /tmp/telegram-bot-api-data

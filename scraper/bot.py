@@ -221,7 +221,14 @@ def main():
     local_api_url = os.getenv("TELEGRAM_LOCAL_API_URL")
     if local_api_url:
         print(f"Using Local Bot API Server: {local_api_url}")
-        app = Application.builder().token(TELEGRAM_BOT_TOKEN).base_url(f"{local_api_url}/bot").build()
+        app = (
+            Application.builder()
+            .token(TELEGRAM_BOT_TOKEN)
+            .base_url(f"{local_api_url}/bot")
+            .base_file_url(f"{local_api_url}/file/bot")
+            .local_mode(True)
+            .build()
+        )
     else:
         app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
