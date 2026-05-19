@@ -157,6 +157,236 @@ async def download_file_concurrently(url, headers, file_path, status_msg, total_
                     pass
         raise e
 
+async def process_single_url(url: str, update: Update, user_ndus: str | None):
+    import uuid
+    task_id = str(uuid.uuid4())[:8]
+    temp_filename = f"/tmp/temp_{update.message.message_id}_{task_id}.mp4"
+    
+    status_msg = await update.message.reply_text(f"🔍 Extracting video from link: {url}\nThis might take up to 20 seconds...")
+    
+    try:
+        async with httpx.AsyncClient(timeout=180.0, follow_redirects=True) as client:
+            payload = {"url": url}
+            if user_ndus:
+                payload["ndus"] = user_ndus
+                
+            res = await client.post(API_ENDPOINT, json=payload)
+            
+            if res.status_code != 200:
+                error_detail = res.json().get("detail", "Unknown error")
+                await status_msg.edit_text(f"❌ Failed to extract: {error_detail}")
+                return
+            
+            data = res.json()
+            direct_url = data.get("directUrl")
+            filename = data.get("filename", "video.mp4")
+            cookies = data.get("cookies", "")
+
+            if not direct_url:
+                await status_msg.edit_text("❌ Could not find a valid video stream in that link.")
+                return
+
+            await status_msg.edit_text("⏳ Downloading video securely to server...")
+
+            if ".m3u8" in direct_url or "type=M3U8" in direct_url:
+                await status_msg.edit_text("⏳ Stitching video chunks with yt-dlp... (This might take a minute)")
+                
+                process = await asyncio.create_subprocess_exec(
+                    'yt-dlp', direct_url, 
+                    '--add-header', 'Referer: https://www.terabox.app/', 
+                    '--add-header', f'Cookie: {cookies}', 
+                    '--concurrent-fragments', '8',
+                    '-o', temp_filename,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                try:
+                    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300.0)
+                    if process.returncode != 0:
+                        error_msg = stderr.decode() if stderr else "Unknown error"
+                        await status_msg.edit_text(f"❌ yt-dlp failed to stitch the video:\n`{error_msg[-500:]}`", parse_mode="Markdown")
+                        return
+                except asyncio.TimeoutError:
+                    try:
+                        process.kill()
+                    except:
+                        pass
+                    await status_msg.edit_text("❌ Video stitching with yt-dlp timed out after 5 minutes.")
+                    return
+                    
+                file_size = os.path.getsize(temp_filename)
+                if file_size > MAX_FILE_SIZE:
+                    encoded_filename = quote(filename)
+                    download_link = f"{PUBLIC_URL}/api/download?local_file={temp_filename}&filename={encoded_filename}"
+                    await status_msg.edit_text(
+                        f"⚠️ **File is too large to send directly on Telegram ({file_size/1000000:.1f} MB)**\n"
+                        f"Telegram limits bots to sending files under {MAX_FILE_SIZE/1000000:.0f}MB.\n\n"
+                        f"👉 You can stream/play or download it directly:\n"
+                        f"🎥 [Stream & Watch Video]({download_link})\n"
+                        f"📥 [Download Video]({download_link})",
+                        parse_mode="Markdown"
+                    )
+                    return
+            else:
+                headers_dl = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Cookie": cookies,
+                    "Referer": "https://www.terabox.app/"
+                }
+                
+                content_length = None
+                use_concurrent = False
+                
+                try:
+                    async with client.stream("GET", direct_url, headers=headers_dl) as stream_res:
+                        if stream_res.status_code == 200:
+                            content_length_val = stream_res.headers.get("Content-Length")
+                            if content_length_val:
+                                content_length = int(content_length_val)
+                                if content_length > 10000000:
+                                    use_concurrent = True
+                        else:
+                            await status_msg.edit_text(f"❌ Failed to download video stream (HTTP {stream_res.status_code})")
+                            return
+                except Exception as e:
+                    print(f"Error inspecting headers: {e}")
+
+                if use_concurrent and content_length:
+                    if content_length > MAX_FILE_SIZE:
+                        mb_size = content_length / 1000000
+                        encoded_url = quote(direct_url)
+                        encoded_filename = quote(filename)
+                        encoded_cookies = quote(cookies)
+                        
+                        player_link = f"{PUBLIC_URL}/player?url={encoded_url}&filename={encoded_filename}&cookies={encoded_cookies}"
+                        download_link = f"{PUBLIC_URL}/api/download?url={encoded_url}&filename={encoded_filename}&cookies={encoded_cookies}"
+                        
+                        await status_msg.edit_text(
+                            f"⚠️ **File is too large to send directly on Telegram ({mb_size:.1f} MB)**\n"
+                            f"Telegram limits bots to sending files under {MAX_FILE_SIZE/1000000:.0f}MB.\n\n"
+                            f"👉 You can stream/play or download it directly:\n"
+                            f"🎥 [Stream & Watch Video]({player_link})\n"
+                            f"📥 [Download Video]({download_link})",
+                            parse_mode="Markdown"
+                        )
+                        return
+
+                    try:
+                        await download_file_concurrently(
+                            url=direct_url,
+                            headers=headers_dl,
+                            file_path=temp_filename,
+                            status_msg=status_msg,
+                            total_bytes=content_length,
+                            num_connections=6
+                        )
+                    except Exception as dl_err:
+                        print(f"Concurrent download failed: {dl_err}. Falling back to single connection.")
+                        use_concurrent = False
+
+                if not use_concurrent:
+                    async with client.stream("GET", direct_url, headers=headers_dl) as stream_res:
+                        if stream_res.status_code != 200:
+                            await status_msg.edit_text(f"❌ Failed to download video stream (HTTP {stream_res.status_code})")
+                            return
+                            
+                        total_bytes = int(stream_res.headers.get("Content-Length", 0)) or content_length or 0
+                        downloaded_bytes = 0
+                        last_update_time = asyncio.get_event_loop().time()
+
+                        with open(temp_filename, "wb") as f:
+                            async for chunk in stream_res.aiter_bytes(chunk_size=16384):
+                                f.write(chunk)
+                                downloaded_bytes += len(chunk)
+                                
+                                if downloaded_bytes > MAX_FILE_SIZE:
+                                    break
+                                
+                                current_time = asyncio.get_event_loop().time()
+                                if current_time - last_update_time > 4.0:
+                                    last_update_time = current_time
+                                    percent = (downloaded_bytes / total_bytes * 100) if total_bytes else 0
+                                    mb_downloaded = downloaded_bytes / 1000000
+                                    mb_total = total_bytes / 1000000
+                                    progress_text = (
+                                        f"⏳ Downloading video securely to server...\n"
+                                        f"`[{'█' * int(percent // 10)}{'░' * (10 - int(percent // 10))}]` {percent:.1f}%\n"
+                                        f"🔹 {mb_downloaded:.1f} MB / {mb_total:.1f} MB"
+                                    )
+                                    try:
+                                        await status_msg.edit_text(progress_text, parse_mode="Markdown")
+                                    except Exception:
+                                        pass
+
+                        if downloaded_bytes > MAX_FILE_SIZE:
+                            try:
+                                os.remove(temp_filename)
+                            except:
+                                pass
+                                
+                            encoded_url = quote(direct_url)
+                            encoded_filename = quote(filename)
+                            encoded_cookies = quote(cookies)
+                            
+                            player_link = f"{PUBLIC_URL}/player?url={encoded_url}&filename={encoded_filename}&cookies={encoded_cookies}"
+                            download_link = f"{PUBLIC_URL}/api/download?url={encoded_url}&filename={encoded_filename}&cookies={encoded_cookies}"
+                            
+                            await status_msg.edit_text(
+                                f"⚠️ **File is too large to send directly on Telegram (>{MAX_FILE_SIZE/1000000:.0f} MB)**\n"
+                                f"Telegram limits bots to sending files under {MAX_FILE_SIZE/1000000:.0f}MB.\n\n"
+                                f"👉 You can stream/play or download it directly:\n"
+                                f"🎥 [Stream & Watch Video]({player_link})\n"
+                                f"📥 [Download Video]({download_link})",
+                                parse_mode="Markdown"
+                            )
+                            return
+            
+            await status_msg.edit_text("🚀 Uploading to Telegram...")
+
+            abs_filepath = os.path.abspath(temp_filename)
+            local_api_url = os.getenv("TELEGRAM_LOCAL_API_URL")
+            
+            if local_api_url:
+                try:
+                    await update.message.reply_video(
+                        video=abs_filepath,
+                        caption=f"🎥 Downloaded Successfully!\nLink: {url}",
+                        write_timeout=300,
+                        read_timeout=300
+                    )
+                except Exception as local_err:
+                    print(f"Local file sending failed: {local_err}. Trying direct upload...")
+                    with open(temp_filename, "rb") as video_file:
+                        await update.message.reply_video(
+                            video=video_file,
+                            caption=f"🎥 Downloaded Successfully!\nLink: {url}",
+                            write_timeout=300,
+                            read_timeout=300
+                        )
+            else:
+                with open(temp_filename, "rb") as video_file:
+                    await update.message.reply_video(
+                        video=video_file,
+                        caption=f"🎥 Downloaded Successfully!\nLink: {url}",
+                        write_timeout=300,
+                        read_timeout=300
+                    )
+            
+            await status_msg.delete()
+            if os.path.exists(temp_filename):
+                os.remove(temp_filename)
+
+    except Exception as e:
+        try:
+            await status_msg.edit_text(f"❌ An error occurred: {str(e)}")
+        except:
+            pass
+        if os.path.exists(temp_filename):
+            try:
+                os.remove(temp_filename)
+            except:
+                pass
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text or update.message.caption
     if not text:
@@ -172,229 +402,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_ndus = get_user_ndus(user_id)
 
     for url in terabox_urls:
-        status_msg = await update.message.reply_text(f"🔍 Extracting video from link: {url}\nThis might take up to 20 seconds...")
-        
-        try:
-            async with httpx.AsyncClient(timeout=180.0, follow_redirects=True) as client:
-                payload = {"url": url}
-                if user_ndus:
-                    payload["ndus"] = user_ndus
-                    
-                res = await client.post(API_ENDPOINT, json=payload)
-                
-                if res.status_code != 200:
-                    error_detail = res.json().get("detail", "Unknown error")
-                    await status_msg.edit_text(f"❌ Failed to extract: {error_detail}")
-                    continue
-                
-                data = res.json()
-                direct_url = data.get("directUrl")
-                filename = data.get("filename", "video.mp4")
-                cookies = data.get("cookies", "")
-
-                if not direct_url:
-                    await status_msg.edit_text("❌ Could not find a valid video stream in that link.")
-                    continue
-
-                await status_msg.edit_text("⏳ Downloading video securely to server...")
-
-                temp_filename = f"/tmp/temp_{update.message.message_id}.mp4"
-                
-                if ".m3u8" in direct_url or "type=M3U8" in direct_url:
-                    await status_msg.edit_text("⏳ Stitching video chunks with yt-dlp... (This might take a minute)")
-                    
-                    process = await asyncio.create_subprocess_exec(
-                        'yt-dlp', direct_url, 
-                        '--add-header', 'Referer: https://www.terabox.app/', 
-                        '--add-header', f'Cookie: {cookies}', 
-                        '--concurrent-fragments', '8',
-                        '-o', temp_filename,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE
-                    )
-                    try:
-                        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300.0)
-                        if process.returncode != 0:
-                            error_msg = stderr.decode() if stderr else "Unknown error"
-                            await status_msg.edit_text(f"❌ yt-dlp failed to stitch the video:\n`{error_msg[-500:]}`", parse_mode="Markdown")
-                            continue
-                    except asyncio.TimeoutError:
-                        try:
-                            process.kill()
-                        except:
-                            pass
-                        await status_msg.edit_text("❌ Video stitching with yt-dlp timed out after 5 minutes.")
-                        continue
-                        
-                    file_size = os.path.getsize(temp_filename)
-                    if file_size > MAX_FILE_SIZE:
-                        encoded_filename = quote(filename)
-                        download_link = f"{PUBLIC_URL}/api/download?local_file={temp_filename}&filename={encoded_filename}"
-                        await status_msg.edit_text(
-                            f"⚠️ **File is too large to send directly on Telegram ({file_size/1000000:.1f} MB)**\n"
-                            f"Telegram limits bots to sending files under {MAX_FILE_SIZE/1000000:.0f}MB.\n\n"
-                            f"👉 You can stream/play or download it directly:\n"
-                            f"🎥 [Stream & Watch Video]({download_link})\n"
-                            f"📥 [Download Video]({download_link})",
-                            parse_mode="Markdown"
-                        )
-                        continue
-                else:
-                    headers_dl = {
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                        "Cookie": cookies,
-                        "Referer": "https://www.terabox.app/"
-                    }
-                    
-                    content_length = None
-                    use_concurrent = False
-                    
-                    try:
-                        async with client.stream("GET", direct_url, headers=headers_dl) as stream_res:
-                            if stream_res.status_code == 200:
-                                content_length_val = stream_res.headers.get("Content-Length")
-                                if content_length_val:
-                                    content_length = int(content_length_val)
-                                    if content_length > 10000000:
-                                        use_concurrent = True
-                            else:
-                                await status_msg.edit_text(f"❌ Failed to download video stream (HTTP {stream_res.status_code})")
-                                continue
-                    except Exception as e:
-                        print(f"Error inspecting headers: {e}")
-
-                    if use_concurrent and content_length:
-                        if content_length > MAX_FILE_SIZE:
-                            mb_size = content_length / 1000000
-                            encoded_url = quote(direct_url)
-                            encoded_filename = quote(filename)
-                            encoded_cookies = quote(cookies)
-                            
-                            player_link = f"{PUBLIC_URL}/player?url={encoded_url}&filename={encoded_filename}&cookies={encoded_cookies}"
-                            download_link = f"{PUBLIC_URL}/api/download?url={encoded_url}&filename={encoded_filename}&cookies={encoded_cookies}"
-                            
-                            await status_msg.edit_text(
-                                f"⚠️ **File is too large to send directly on Telegram ({mb_size:.1f} MB)**\n"
-                                f"Telegram limits bots to sending files under {MAX_FILE_SIZE/1000000:.0f}MB.\n\n"
-                                f"👉 You can stream/play or download it directly:\n"
-                                f"🎥 [Stream & Watch Video]({player_link})\n"
-                                f"📥 [Download Video]({download_link})",
-                                parse_mode="Markdown"
-                            )
-                            continue
-
-                        try:
-                            await download_file_concurrently(
-                                url=direct_url,
-                                headers=headers_dl,
-                                file_path=temp_filename,
-                                status_msg=status_msg,
-                                total_bytes=content_length,
-                                num_connections=6
-                            )
-                        except Exception as dl_err:
-                            print(f"Concurrent download failed: {dl_err}. Falling back to single connection.")
-                            use_concurrent = False
-
-                    if not use_concurrent:
-                        async with client.stream("GET", direct_url, headers=headers_dl) as stream_res:
-                            if stream_res.status_code != 200:
-                                await status_msg.edit_text(f"❌ Failed to download video stream (HTTP {stream_res.status_code})")
-                                continue
-                                
-                            total_bytes = int(stream_res.headers.get("Content-Length", 0)) or content_length or 0
-                            downloaded_bytes = 0
-                            last_update_time = asyncio.get_event_loop().time()
-
-                            with open(temp_filename, "wb") as f:
-                                async for chunk in stream_res.aiter_bytes(chunk_size=16384):
-                                    f.write(chunk)
-                                    downloaded_bytes += len(chunk)
-                                    
-                                    if downloaded_bytes > MAX_FILE_SIZE:
-                                        break
-                                    
-                                    current_time = asyncio.get_event_loop().time()
-                                    if current_time - last_update_time > 4.0:
-                                        last_update_time = current_time
-                                        percent = (downloaded_bytes / total_bytes * 100) if total_bytes else 0
-                                        mb_downloaded = downloaded_bytes / 1000000
-                                        mb_total = total_bytes / 1000000
-                                        progress_text = (
-                                            f"⏳ Downloading video securely to server...\n"
-                                            f"`[{'█' * int(percent // 10)}{'░' * (10 - int(percent // 10))}]` {percent:.1f}%\n"
-                                            f"🔹 {mb_downloaded:.1f} MB / {mb_total:.1f} MB"
-                                        )
-                                        try:
-                                            await status_msg.edit_text(progress_text, parse_mode="Markdown")
-                                        except Exception:
-                                            pass
-
-                            if downloaded_bytes > MAX_FILE_SIZE:
-                                try:
-                                    os.remove(temp_filename)
-                                except:
-                                    pass
-                                    
-                                encoded_url = quote(direct_url)
-                                encoded_filename = quote(filename)
-                                encoded_cookies = quote(cookies)
-                                
-                                player_link = f"{PUBLIC_URL}/player?url={encoded_url}&filename={encoded_filename}&cookies={encoded_cookies}"
-                                download_link = f"{PUBLIC_URL}/api/download?url={encoded_url}&filename={encoded_filename}&cookies={encoded_cookies}"
-                                
-                                await status_msg.edit_text(
-                                    f"⚠️ **File is too large to send directly on Telegram (>{MAX_FILE_SIZE/1000000:.0f} MB)**\n"
-                                    f"Telegram limits bots to sending files under {MAX_FILE_SIZE/1000000:.0f}MB.\n\n"
-                                    f"👉 You can stream/play or download it directly:\n"
-                                    f"🎥 [Stream & Watch Video]({player_link})\n"
-                                    f"📥 [Download Video]({download_link})",
-                                    parse_mode="Markdown"
-                                )
-                                continue
-                
-                await status_msg.edit_text("🚀 Uploading to Telegram...")
-
-                abs_filepath = os.path.abspath(temp_filename)
-                local_api_url = os.getenv("TELEGRAM_LOCAL_API_URL")
-                
-                if local_api_url:
-                    try:
-                        # In local mode, pass the absolute path of the file as a string.
-                        # This tells the local Bot API server to read the file directly from disk.
-                        await update.message.reply_video(
-                            video=abs_filepath,
-                            caption=f"🎥 Downloaded Successfully!\nLink: {url}",
-                            write_timeout=300,
-                            read_timeout=300
-                        )
-                    except Exception as local_err:
-                        print(f"Local file sending failed: {local_err}. Trying direct upload...")
-                        with open(temp_filename, "rb") as video_file:
-                            await update.message.reply_video(
-                                video=video_file,
-                                caption=f"🎥 Downloaded Successfully!\nLink: {url}",
-                                write_timeout=300,
-                                read_timeout=300
-                            )
-                else:
-                    with open(temp_filename, "rb") as video_file:
-                        await update.message.reply_video(
-                            video=video_file,
-                            caption=f"🎥 Downloaded Successfully!\nLink: {url}",
-                            write_timeout=300,
-                            read_timeout=300
-                        )
-                
-                await status_msg.delete()
-                if os.path.exists(temp_filename):
-                    os.remove(temp_filename)
-
-        except Exception as e:
-            await status_msg.edit_text(f"❌ An error occurred: {str(e)}")
-            temp_path = f"/tmp/temp_{update.message.message_id}.mp4"
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+        asyncio.create_task(process_single_url(url, update, user_ndus))
 
 def main():
     if not TELEGRAM_BOT_TOKEN:
