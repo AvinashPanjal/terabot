@@ -7,11 +7,14 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
 
+from urllib.parse import quote
+
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 PORT = os.getenv("PORT", "8000")
 API_ENDPOINT = f"http://127.0.0.1:{PORT}/api/extract"
+PUBLIC_URL = os.getenv("RENDER_EXTERNAL_URL") or f"http://localhost:{PORT}"
 
 # Regex to find Terabox domains
 TERABOX_REGEX = r"https?:\/\/(www\.)?(terabox\.com|teraboxapp\.com|1024tera\.com|nephobox\.com|4funbox\.com|mirrobox\.com|momerybox\.com|teraboxlink\.com|terafileshare\.com)[^\s]+"
@@ -148,9 +151,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await status_msg.edit_text(f"❌ yt-dlp failed to stitch the video:\n`{error_msg[-500:]}`", parse_mode="Markdown")
                         continue
                         
-                    if os.path.getsize(temp_filename) > 50000000:
-                        await status_msg.edit_text("❌ **File is too large!**\nTelegram limits bots to sending files under 50MB.", parse_mode="Markdown")
-                        os.remove(temp_filename)
+                    file_size = os.path.getsize(temp_filename)
+                    if file_size > 50000000:
+                        encoded_filename = quote(filename)
+                        download_link = f"{PUBLIC_URL}/api/download?local_file={temp_filename}&filename={encoded_filename}"
+                        await status_msg.edit_text(
+                            f"⚠️ **File is too large to send directly on Telegram ({file_size/1000000:.1f} MB)**\n"
+                            f"Telegram limits bots to sending files under 50MB.\n\n"
+                            f"👉 You can download it directly here:\n"
+                            f"📥 [Download Video]({download_link})",
+                            parse_mode="Markdown"
+                        )
                         continue
                 else:
                     headers_dl = {
@@ -165,7 +176,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             
                         content_length = stream_res.headers.get("Content-Length")
                         if content_length and int(content_length) > 50000000:
-                            await status_msg.edit_text("❌ **File is too large!**\nTelegram limits bots to sending files under 50MB.", parse_mode="Markdown")
+                            mb_size = int(content_length) / 1000000
+                            encoded_url = quote(direct_url)
+                            encoded_filename = quote(filename)
+                            encoded_cookies = quote(cookies)
+                            download_link = f"{PUBLIC_URL}/api/download?url={encoded_url}&filename={encoded_filename}&cookies={encoded_cookies}"
+                            
+                            await status_msg.edit_text(
+                                f"⚠️ **File is too large to send directly on Telegram ({mb_size:.1f} MB)**\n"
+                                f"Telegram limits bots to sending files under 50MB.\n\n"
+                                f"👉 You can download it directly here:\n"
+                                f"📥 [Download Video]({download_link})",
+                                parse_mode="Markdown"
+                            )
                             continue
 
                         with open(temp_filename, "wb") as f:

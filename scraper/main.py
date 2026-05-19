@@ -8,14 +8,16 @@ os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(os.path.dirname(os.path.ab
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from playwright.async_api import async_playwright
 import uvicorn
 import re
 import httpx
-from urllib.parse import urlparse, parse_qs
+import time
+from urllib.parse import urlparse, parse_qs, unquote
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -129,9 +131,25 @@ async def keep_alive_task():
         # Sleep for 1 hour
         await asyncio.sleep(3600)
 
+async def cleanup_loop():
+    while True:
+        try:
+            folder = os.path.dirname(os.path.abspath(__file__))
+            now = time.time()
+            for f in os.listdir(folder):
+                if f.startswith("temp_") and f.endswith(".mp4"):
+                    path = os.path.join(folder, f)
+                    if now - os.path.getmtime(path) > 3600: # 1 hour
+                        os.remove(path)
+                        print(f"Auto-cleaned old temp file: {f}")
+        except Exception as e:
+            print(f"Error cleaning old temp files: {e}")
+        await asyncio.sleep(1800) # Check every 30 minutes
+
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(keep_alive_task())
+    asyncio.create_task(cleanup_loop())
 
 @app.post("/api/extract")
 async def extract_url(req: ExtractRequest):
@@ -376,6 +394,63 @@ async def extract_url(req: ExtractRequest):
         "filename": filename,
         "cookies": cookie_string
     }
+
+@app.get("/api/download")
+async def download_file(
+    url: str | None = None,
+    filename: str | None = None,
+    cookies: str | None = None,
+    local_file: str | None = None
+):
+    if local_file:
+        # Prevent path traversal attacks by getting just the basename
+        safe_filename = os.path.basename(local_file)
+        file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), safe_filename)
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="File not found")
+            
+        # Set up a background task to delete the file after it is served
+        from fastapi import BackgroundTasks
+        background_tasks = BackgroundTasks()
+        def delete_file(path: str):
+            try:
+                # Wait 5 seconds after serving to ensure release
+                import time
+                time.sleep(5)
+                if os.path.exists(path):
+                    os.remove(path)
+                    print(f"Cleaned up served local file: {path}")
+            except Exception as e:
+                print(f"Error deleting served file: {e}")
+                
+        background_tasks.add_task(delete_file, file_path)
+        return FileResponse(
+            file_path,
+            filename=filename or safe_filename,
+            background=background_tasks
+        )
+
+    if not url:
+        raise HTTPException(status_code=400, detail="URL is required")
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Cookie": unquote(cookies) if cookies else "",
+        "Referer": "https://www.terabox.app/"
+    }
+
+    async def stream_generator():
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            async with client.stream("GET", url, headers=headers, follow_redirects=True) as response:
+                async for chunk in response.aiter_bytes(chunk_size=1024*64):
+                    yield chunk
+
+    # Return stream
+    return StreamingResponse(
+        stream_generator(),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename or "video.mp4"}"'}
+    )
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
