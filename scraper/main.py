@@ -1,5 +1,9 @@
+import os
 import sys
 import asyncio
+
+# Set Playwright browsers path inside the project root for Render compatibility
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pw-browsers")
 
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -9,7 +13,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from playwright.async_api import async_playwright
 import uvicorn
-import os
 import re
 import httpx
 from urllib.parse import urlparse, parse_qs
