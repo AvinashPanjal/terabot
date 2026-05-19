@@ -109,8 +109,8 @@ async def download_file_concurrently(url, headers, file_path, status_msg, total_
         
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
             async with client.stream("GET", url, headers=part_headers) as res:
-                if res.status_code not in (200, 206):
-                    raise Exception(f"Part {part_index} failed with status {res.status_code}")
+                if res.status_code != 206:
+                    raise Exception(f"Part {part_index} failed with status {res.status_code} (range requests not supported or blocked)")
                 
                 with open(part_file_path, "wb") as pf:
                     async for chunk in res.aiter_bytes(chunk_size=16384):
@@ -246,46 +246,53 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     }
                     
                     content_length = None
+                    use_concurrent = False
+                    
                     try:
-                        head_headers = headers_dl.copy()
-                        head_headers["Range"] = "bytes=0-0"
-                        head_res = await client.get(direct_url, headers=head_headers, timeout=10.0)
-                        if head_res.status_code in (200, 206):
-                            content_length_str = head_res.headers.get("Content-Range")
-                            if content_length_str and "/" in content_length_str:
-                                content_length = int(content_length_str.split("/")[-1])
+                        async with client.stream("GET", direct_url, headers=headers_dl) as stream_res:
+                            if stream_res.status_code == 200:
+                                content_length_val = stream_res.headers.get("Content-Length")
+                                if content_length_val:
+                                    content_length = int(content_length_val)
+                                    if content_length > 10000000:
+                                        use_concurrent = True
                             else:
-                                content_length = int(head_res.headers.get("Content-Length", 0))
-                    except Exception as head_err:
-                        print(f"Error checking content length: {head_err}")
+                                await status_msg.edit_text(f"❌ Failed to download video stream (HTTP {stream_res.status_code})")
+                                continue
+                    except Exception as e:
+                        print(f"Error inspecting headers: {e}")
 
-                    if content_length and content_length > MAX_FILE_SIZE:
-                        mb_size = content_length / 1000000
-                        encoded_url = quote(direct_url)
-                        encoded_filename = quote(filename)
-                        encoded_cookies = quote(cookies)
-                        download_link = f"{PUBLIC_URL}/api/download?url={encoded_url}&filename={encoded_filename}&cookies={encoded_cookies}"
-                        
-                        await status_msg.edit_text(
-                            f"⚠️ **File is too large to send directly on Telegram ({mb_size:.1f} MB)**\n"
-                            f"Telegram limits bots to sending files under {MAX_FILE_SIZE/1000000:.0f}MB.\n\n"
-                            f"👉 You can download it directly here:\n"
-                            f"📥 [Download Video]({download_link})",
-                            parse_mode="Markdown"
-                        )
-                        continue
+                    if use_concurrent and content_length:
+                        if content_length > MAX_FILE_SIZE:
+                            mb_size = content_length / 1000000
+                            encoded_url = quote(direct_url)
+                            encoded_filename = quote(filename)
+                            encoded_cookies = quote(cookies)
+                            download_link = f"{PUBLIC_URL}/api/download?url={encoded_url}&filename={encoded_filename}&cookies={encoded_cookies}"
+                            
+                            await status_msg.edit_text(
+                                f"⚠️ **File is too large to send directly on Telegram ({mb_size:.1f} MB)**\n"
+                                f"Telegram limits bots to sending files under {MAX_FILE_SIZE/1000000:.0f}MB.\n\n"
+                                f"👉 You can download it directly here:\n"
+                                f"📥 [Download Video]({download_link})",
+                                parse_mode="Markdown"
+                            )
+                            continue
 
-                    # If file is > 10MB, download concurrently for speed boost!
-                    if content_length and content_length > 10000000:
-                        await download_file_concurrently(
-                            url=direct_url,
-                            headers=headers_dl,
-                            file_path=temp_filename,
-                            status_msg=status_msg,
-                            total_bytes=content_length,
-                            num_connections=12  # 12 concurrent connections for ultra-fast download
-                        )
-                    else:
+                        try:
+                            await download_file_concurrently(
+                                url=direct_url,
+                                headers=headers_dl,
+                                file_path=temp_filename,
+                                status_msg=status_msg,
+                                total_bytes=content_length,
+                                num_connections=6
+                            )
+                        except Exception as dl_err:
+                            print(f"Concurrent download failed: {dl_err}. Falling back to single connection.")
+                            use_concurrent = False
+
+                    if not use_concurrent:
                         async with client.stream("GET", direct_url, headers=headers_dl) as stream_res:
                             if stream_res.status_code != 200:
                                 await status_msg.edit_text(f"❌ Failed to download video stream (HTTP {stream_res.status_code})")
