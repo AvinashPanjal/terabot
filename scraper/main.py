@@ -29,6 +29,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+playwright_semaphore = None
+
 class ExtractRequest(BaseModel):
     url: str
     ndus: str | None = None
@@ -205,6 +207,11 @@ async def extract_url(req: ExtractRequest):
     filename = "video.mp4"
     cookie_string = ""
 
+    global playwright_semaphore
+    if playwright_semaphore is None:
+        playwright_semaphore = asyncio.Semaphore(1)
+
+    await playwright_semaphore.acquire()
     try:
         async with async_playwright() as p:
             user_data_dir = os.path.join(os.path.dirname(__file__), "browser_session")
@@ -278,7 +285,7 @@ async def extract_url(req: ExtractRequest):
 
             print(f"Navigating to {target_url} ...")
             try:
-                await page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
+                await page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
                 print("Page loaded.")
             except Exception as e:
                 print(f"Playwright error during goto: {e}")
@@ -357,6 +364,8 @@ async def extract_url(req: ExtractRequest):
     except Exception as e:
         print(f"Playwright error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        playwright_semaphore.release()
 
     if not direct_url:
         raise HTTPException(status_code=404, detail="Could not extract direct download URL from TeraBox link.")
