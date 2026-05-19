@@ -37,6 +37,9 @@ COPY --from=builder /usr/local/bin/telegram-bot-api /usr/local/bin/telegram-bot-
 # Set the working directory
 WORKDIR /app
 
+# Ensure Playwright browser installs to the correct location in the container
+ENV PLAYWRIGHT_BROWSERS_PATH=/app/scraper/pw-browsers
+
 # Copy requirements and install python packages
 COPY scraper/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
