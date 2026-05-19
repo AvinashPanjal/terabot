@@ -8,9 +8,9 @@ os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(os.path.dirname(os.path.ab
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 from pydantic import BaseModel
 from playwright.async_api import async_playwright
 import uvicorn
@@ -430,6 +430,215 @@ async def extract_url(req: ExtractRequest):
         "filename": filename,
         "cookies": cookie_string
     }
+
+@app.get("/player", response_class=HTMLResponse)
+async def player_page(url: str, cookies: str = "", filename: str = "Video Player"):
+    from urllib.parse import quote
+    stream_url = f"/api/stream?url={quote(url)}&cookies={quote(cookies)}"
+    download_url = f"/api/download?url={quote(url)}&filename={quote(filename)}&cookies={quote(cookies)}"
+    
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{filename}</title>
+        <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+        <style>
+            * {{
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+            }}
+            body {{
+                font-family: 'Outfit', sans-serif;
+                background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+                color: #f8fafc;
+                min-height: 100vh;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                overflow-x: hidden;
+                padding: 20px;
+            }}
+            .container {{
+                width: 100%;
+                max-width: 900px;
+                background: rgba(30, 41, 59, 0.4);
+                backdrop-filter: blur(16px);
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                border-radius: 24px;
+                padding: 24px;
+                box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3);
+                display: flex;
+                flex-direction: column;
+                gap: 20px;
+                animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+            }}
+            @keyframes fadeIn {{
+                from {{ opacity: 0; transform: translateY(20px); }}
+                to {{ opacity: 1; transform: translateY(0); }}
+            }}
+            .header {{
+                text-align: center;
+            }}
+            h1 {{
+                font-size: 1.8rem;
+                font-weight: 800;
+                background: linear-gradient(to right, #38bdf8, #818cf8);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
+                margin-bottom: 8px;
+                word-break: break-all;
+            }}
+            p.subtitle {{
+                font-size: 0.95rem;
+                color: #94a3b8;
+            }}
+            .video-wrapper {{
+                width: 100%;
+                aspect-ratio: 16/9;
+                border-radius: 16px;
+                overflow: hidden;
+                box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+                background: #000;
+                border: 1px solid rgba(255, 255, 255, 0.05);
+            }}
+            video {{
+                width: 100%;
+                height: 100%;
+                object-fit: contain;
+            }}
+            .actions {{
+                display: flex;
+                gap: 16px;
+                justify-content: center;
+                flex-wrap: wrap;
+            }}
+            .btn {{
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                padding: 14px 28px;
+                border-radius: 12px;
+                font-weight: 600;
+                text-decoration: none;
+                transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+                cursor: pointer;
+                font-size: 1rem;
+            }}
+            .btn-primary {{
+                background: linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%);
+                color: #fff;
+                border: none;
+                box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);
+            }}
+            .btn-primary:hover {{
+                transform: translateY(-2px);
+                box-shadow: 0 6px 20px rgba(59, 130, 246, 0.6);
+            }}
+            .btn-secondary {{
+                background: rgba(255, 255, 255, 0.1);
+                color: #f8fafc;
+                border: 1px solid rgba(255, 255, 255, 0.2);
+            }}
+            .btn-secondary:hover {{
+                background: rgba(255, 255, 255, 0.2);
+                transform: translateY(-2px);
+            }}
+            .footer {{
+                margin-top: 30px;
+                font-size: 0.8rem;
+                color: #64748b;
+                text-align: center;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>{filename}</h1>
+                <p class="subtitle">Premium TeraBox Direct Player</p>
+            </div>
+            
+            <div class="video-wrapper">
+                <video controls autoplay playsinline preload="auto">
+                    <source src="{stream_url}" type="video/mp4">
+                    Your browser does not support the video tag.
+                </video>
+            </div>
+            
+            <div class="actions">
+                <a href="{download_url}" class="btn btn-primary">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                    Download Video
+                </a>
+                <button onclick="window.location.reload();" class="btn btn-secondary">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path></svg>
+                    Reload Stream
+                </button>
+            </div>
+        </div>
+        
+        <div class="footer">
+            Powered by TeraBot Premium Downloader Engine
+        </div>
+    </body>
+    </html>
+    """
+    return html_content
+
+@app.get("/api/stream")
+async def stream_video(
+    url: str | None = None,
+    cookies: str | None = None,
+    request: Request = None
+):
+    if not url:
+        raise HTTPException(status_code=400, detail="URL is required")
+
+    range_header = request.headers.get("range")
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Cookie": unquote(cookies) if cookies else "",
+        "Referer": "https://www.terabox.app/"
+    }
+    if range_header:
+        headers["Range"] = range_header
+
+    client = httpx.AsyncClient(timeout=60.0, follow_redirects=True)
+    try:
+        response = await client.send(
+            client.build_request("GET", url, headers=headers),
+            stream=True
+        )
+        res_headers = {
+            "Content-Type": response.headers.get("Content-Type", "video/mp4"),
+            "Accept-Ranges": response.headers.get("Accept-Ranges", "bytes")
+        }
+        if response.headers.get("Content-Range"):
+            res_headers["Content-Range"] = response.headers.get("Content-Range")
+        if response.headers.get("Content-Length"):
+            res_headers["Content-Length"] = response.headers.get("Content-Length")
+
+        async def stream_generator():
+            try:
+                async for chunk in response.aiter_bytes(chunk_size=1024*128):
+                    yield chunk
+            finally:
+                await response.aclose()
+                await client.aclose()
+
+        return StreamingResponse(
+            stream_generator(),
+            status_code=response.status_code,
+            headers=res_headers
+        )
+    except Exception as e:
+        await client.aclose()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/download")
 async def download_file(

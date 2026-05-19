@@ -15,7 +15,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 PORT = os.getenv("PORT", "8000")
 API_ENDPOINT = f"http://127.0.0.1:{PORT}/api/extract"
 PUBLIC_URL = os.getenv("RENDER_EXTERNAL_URL") or f"http://localhost:{PORT}"
-MAX_FILE_SIZE = 2000000000 if os.getenv("TELEGRAM_LOCAL_API_URL") else 50000000
+MAX_FILE_SIZE = 50000000
 
 # Regex to find Terabox domains
 TERABOX_REGEX = r"https?:\/\/(www\.)?(terabox\.com|teraboxapp\.com|1024tera\.com|nephobox\.com|4funbox\.com|mirrobox\.com|momerybox\.com|teraboxlink\.com|terafileshare\.com)[^\s]+"
@@ -233,7 +233,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await status_msg.edit_text(
                             f"⚠️ **File is too large to send directly on Telegram ({file_size/1000000:.1f} MB)**\n"
                             f"Telegram limits bots to sending files under {MAX_FILE_SIZE/1000000:.0f}MB.\n\n"
-                            f"👉 You can download it directly here:\n"
+                            f"👉 You can stream/play or download it directly:\n"
+                            f"🎥 [Stream & Watch Video]({download_link})\n"
                             f"📥 [Download Video]({download_link})",
                             parse_mode="Markdown"
                         )
@@ -268,12 +269,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             encoded_url = quote(direct_url)
                             encoded_filename = quote(filename)
                             encoded_cookies = quote(cookies)
+                            
+                            player_link = f"{PUBLIC_URL}/player?url={encoded_url}&filename={encoded_filename}&cookies={encoded_cookies}"
                             download_link = f"{PUBLIC_URL}/api/download?url={encoded_url}&filename={encoded_filename}&cookies={encoded_cookies}"
                             
                             await status_msg.edit_text(
                                 f"⚠️ **File is too large to send directly on Telegram ({mb_size:.1f} MB)**\n"
                                 f"Telegram limits bots to sending files under {MAX_FILE_SIZE/1000000:.0f}MB.\n\n"
-                                f"👉 You can download it directly here:\n"
+                                f"👉 You can stream/play or download it directly:\n"
+                                f"🎥 [Stream & Watch Video]({player_link})\n"
                                 f"📥 [Download Video]({download_link})",
                                 parse_mode="Markdown"
                             )
@@ -307,6 +311,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     f.write(chunk)
                                     downloaded_bytes += len(chunk)
                                     
+                                    if downloaded_bytes > MAX_FILE_SIZE:
+                                        break
+                                    
                                     current_time = asyncio.get_event_loop().time()
                                     if current_time - last_update_time > 4.0:
                                         last_update_time = current_time
@@ -322,6 +329,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                             await status_msg.edit_text(progress_text, parse_mode="Markdown")
                                         except Exception:
                                             pass
+
+                            if downloaded_bytes > MAX_FILE_SIZE:
+                                try:
+                                    os.remove(temp_filename)
+                                except:
+                                    pass
+                                    
+                                encoded_url = quote(direct_url)
+                                encoded_filename = quote(filename)
+                                encoded_cookies = quote(cookies)
+                                
+                                player_link = f"{PUBLIC_URL}/player?url={encoded_url}&filename={encoded_filename}&cookies={encoded_cookies}"
+                                download_link = f"{PUBLIC_URL}/api/download?url={encoded_url}&filename={encoded_filename}&cookies={encoded_cookies}"
+                                
+                                await status_msg.edit_text(
+                                    f"⚠️ **File is too large to send directly on Telegram (>{MAX_FILE_SIZE/1000000:.0f} MB)**\n"
+                                    f"Telegram limits bots to sending files under {MAX_FILE_SIZE/1000000:.0f}MB.\n\n"
+                                    f"👉 You can stream/play or download it directly:\n"
+                                    f"🎥 [Stream & Watch Video]({player_link})\n"
+                                    f"📥 [Download Video]({download_link})",
+                                    parse_mode="Markdown"
+                                )
+                                continue
                 
                 await status_msg.edit_text("🚀 Uploading to Telegram...")
 
