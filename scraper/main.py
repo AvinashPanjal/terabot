@@ -126,20 +126,6 @@ async def keep_alive_task():
 
 @app.on_event("startup")
 async def startup_event():
-    # Automatically install Playwright chromium in the background if missing
-    def auto_install_playwright():
-        import subprocess
-        import threading
-        try:
-            print("Auto-Installer: Ensuring Playwright chromium is installed...")
-            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-            print("Auto-Installer: Playwright chromium successfully verified/installed!")
-        except Exception as e:
-            print(f"Auto-Installer Error: Failed to automatically install Playwright chromium: {e}")
-
-    import threading
-    threading.Thread(target=auto_install_playwright, daemon=True).start()
-    
     asyncio.create_task(keep_alive_task())
 
 @app.post("/api/extract")
