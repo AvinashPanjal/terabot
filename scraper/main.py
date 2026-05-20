@@ -216,7 +216,9 @@ async def status():
         "bot_api_running_port_8081": bot_api_running,
         "log_tail": log_content,
         "env_variables": {k: v for k, v in os.environ.items() if "TOKEN" not in k and "HASH" not in k and "API" not in k}
-    }@app.post("/api/extract")
+    }
+
+@app.post("/api/extract")
 async def extract_url(req: ExtractRequest):
     url = req.url
     if not url:
