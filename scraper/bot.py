@@ -431,13 +431,12 @@ def main():
         print("ERROR: TELEGRAM_BOT_TOKEN is missing from .env file!")
         return
 
-    # Auto-detect Render environment and disable polling to prevent double message issues
-    if "SPACE_ID" not in os.environ and "SPACE_HOST" not in os.environ:
-        if os.getenv("RENDER_EXTERNAL_URL") or os.getenv("RENDER_INSTANCE_ID"):
-            print("⚠️ Render environment detected. Disabling bot polling to prevent duplicate message handling.")
-            import time
-            while True:
-                time.sleep(3600)
+    # Check if bot polling is explicitly disabled
+    if os.getenv("DISABLE_BOT_POLLING") == "true":
+        print("⚠️ Bot polling is explicitly disabled via DISABLE_BOT_POLLING environment variable.")
+        import time
+        while True:
+            time.sleep(3600)
 
     print("Starting Telegram Bot...")
     local_api_url = os.getenv("TELEGRAM_LOCAL_API_URL")
