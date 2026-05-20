@@ -128,8 +128,8 @@ async def keep_alive_task():
                             print(f"Cookie #{i+1} ({ndus[:8]}...): Expired or Invalid! (Status: {res.status_code}, URL: {res.url})")
                 except Exception as e:
                     print(f"Cookie #{i+1} ({ndus[:8]}...): Error during keep-alive: {e}")
-        # Sleep for 1 hour
-        await asyncio.sleep(3600)
+        # Sleep for 10 minutes
+        await asyncio.sleep(600)
 
 async def cleanup_loop():
     while True:

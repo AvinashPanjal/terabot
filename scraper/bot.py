@@ -350,7 +350,6 @@ async def process_single_url(url: str, update: Update, user_ndus: str | None):
                 try:
                     await update.message.reply_video(
                         video=abs_filepath,
-                        caption=f"🎥 Downloaded Successfully!\nLink: {url}",
                         write_timeout=300,
                         read_timeout=300
                     )
@@ -359,7 +358,6 @@ async def process_single_url(url: str, update: Update, user_ndus: str | None):
                     with open(temp_filename, "rb") as video_file:
                         await update.message.reply_video(
                             video=video_file,
-                            caption=f"🎥 Downloaded Successfully!\nLink: {url}",
                             write_timeout=300,
                             read_timeout=300
                         )
@@ -367,12 +365,15 @@ async def process_single_url(url: str, update: Update, user_ndus: str | None):
                 with open(temp_filename, "rb") as video_file:
                     await update.message.reply_video(
                         video=video_file,
-                        caption=f"🎥 Downloaded Successfully!\nLink: {url}",
                         write_timeout=300,
                         read_timeout=300
                     )
             
             await status_msg.delete()
+            try:
+                await update.message.delete()
+            except Exception:
+                pass
             if os.path.exists(temp_filename):
                 os.remove(temp_filename)
 
