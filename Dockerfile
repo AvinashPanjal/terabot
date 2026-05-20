@@ -17,7 +17,7 @@ RUN git clone --recursive https://github.com/tdlib/telegram-bot-api.git \
     && mkdir build \
     && cd build \
     && cmake -DCMAKE_BUILD_TYPE=Release .. \
-    && cmake --build . --target install
+    && cmake --build . --target install -- -j 1
 
 # Stage 2: Final runtime image
 FROM python:3.11-slim-bookworm
