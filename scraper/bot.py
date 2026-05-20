@@ -73,9 +73,9 @@ async def process_single_url(url: str, update: Update):
                 await status_msg.edit_text("❌ Could not find a valid video stream in that link.")
                 return
 
-            await status_msg.edit_text(f"⏳ Downloading & trimming video to {TRIM_DURATION // 60} minutes...")
+            await status_msg.edit_text("⏳ Downloading video stream... (Speed Boost Active)")
 
-            # Use yt-dlp to download and trim the stream/video file natively
+            # Use yt-dlp to download the stream/video file natively
             cmd = [
                 'yt-dlp', direct_url,
                 '--add-header', 'Referer: https://www.terabox.app/',
@@ -85,7 +85,6 @@ async def process_single_url(url: str, update: Update):
             
             cmd += [
                 '--concurrent-fragments', '8',
-                '--download-sections', f'*0-{TRIM_DURATION}',
                 '-o', temp_filename
             ]
             
@@ -99,7 +98,7 @@ async def process_single_url(url: str, update: Update):
                 stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300.0)
                 if process.returncode != 0:
                     error_msg = stderr.decode() if stderr else "Unknown error"
-                    await status_msg.edit_text(f"❌ Failed to download/trim the video:\n`{error_msg[-500:]}`", parse_mode="Markdown")
+                    await status_msg.edit_text(f"❌ Failed to download the video:\n`{error_msg[-500:]}`", parse_mode="Markdown")
                     return
             except asyncio.TimeoutError:
                 try:
@@ -112,6 +111,38 @@ async def process_single_url(url: str, update: Update):
             if not os.path.exists(temp_filename) or os.path.getsize(temp_filename) == 0:
                 await status_msg.edit_text("❌ Downloaded file was empty or not found.")
                 return
+
+            # Trim the local file to TRIM_DURATION using ffmpeg locally
+            await status_msg.edit_text(f"⏳ Trimming video to {TRIM_DURATION // 60} minutes...")
+            trimmed_filename = temp_filename.replace(".mp4", "_trimmed.mp4")
+            trim_cmd = [
+                'ffmpeg', '-y',
+                '-i', temp_filename,
+                '-t', str(TRIM_DURATION),
+                '-c', 'copy',
+                trimmed_filename
+            ]
+            
+            trim_process = await asyncio.create_subprocess_exec(
+                *trim_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout_t, stderr_t = await trim_process.communicate()
+            
+            if trim_process.returncode == 0 and os.path.exists(trimmed_filename) and os.path.getsize(trimmed_filename) > 0:
+                # Replace the original temp_filename with the trimmed one
+                os.remove(temp_filename)
+                os.rename(trimmed_filename, temp_filename)
+                print("Video successfully trimmed locally.")
+            else:
+                trim_err = stderr_t.decode() if stderr_t else "Unknown error"
+                print(f"Warning: Failed to trim video locally: {trim_err}. Using untrimmed version.")
+                if os.path.exists(trimmed_filename):
+                    try:
+                        os.remove(trimmed_filename)
+                    except:
+                        pass
                 
             file_size = os.path.getsize(temp_filename)
             if file_size > MAX_FILE_SIZE:
