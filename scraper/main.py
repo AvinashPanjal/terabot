@@ -353,6 +353,11 @@ async def extract_url(req: ExtractRequest):
             async def handle_request(route, request):
                 nonlocal direct_url
                 req_url = request.url
+                
+                # Print intercepted URLs containing relevant keywords for debugging
+                if any(kw in req_url.lower() for kw in ["download", "video", "stream", "pcs", "m3u8", ".mp4", "api/szfile", "sharing"]) or request.resource_type == "media":
+                    print(f"[Intercepted Request] Type: {request.resource_type} | URL: {req_url}")
+
                 if "google.com" in req_url or "doubleclick.net" in req_url or "analytics" in req_url:
                     await route.continue_()
                     return
@@ -370,7 +375,7 @@ async def extract_url(req: ExtractRequest):
                     return
 
                 if "api/download" in req_url or "type=D" in req_url or ".m3u8" in req_url or "type=M3U8" in req_url or ("freeterabox.com" in req_url and "video" in req_url):
-                    if "terabox" in req_url or "baidupcs" in req_url or "freeterabox" in req_url:
+                    if any(domain in req_url for domain in ["terabox", "baidupcs", "freeterabox", "baidu.com", "pcs", "teraboxcdn"]):
                         if "thumbnail" not in req_url and "favicon" not in req_url:
                             if not direct_url:
                                 direct_url = req_url
@@ -419,8 +424,16 @@ async def extract_url(req: ExtractRequest):
                     print("Video element found! Forcing play...")
                     await page.evaluate("() => { const v = document.querySelector('video'); if(v){ v.muted = true; v.play(); } }")
                     
+                    # Check if the video tag's src contains a direct URL directly
+                    video_src = await page.evaluate("() => { const v = document.querySelector('video'); return v ? v.src : null; }")
+                    if video_src and video_src.startswith("http") and not video_src.startswith("blob"):
+                        print(f"Captured direct URL from video src attribute: {video_src}")
+                        direct_url = video_src
+                    
                     async def keep_playing():
                         for _ in range(5):
+                            if direct_url:
+                                break
                             await asyncio.sleep(2)
                             try:
                                 await page.evaluate("() => { const v = document.querySelector('video'); if(v && v.paused){ v.play(); } }")
@@ -432,6 +445,12 @@ async def extract_url(req: ExtractRequest):
                     for _ in range(10):
                         if direct_url:
                             print("Stream loaded!")
+                            break
+                        # Re-check src attribute if it changed dynamically
+                        video_src = await page.evaluate("() => { const v = document.querySelector('video'); return v ? v.src : null; }")
+                        if video_src and video_src.startswith("http") and not video_src.startswith("blob"):
+                            print(f"Captured direct URL dynamically from video src: {video_src}")
+                            direct_url = video_src
                             break
                         await page.wait_for_timeout(1000)
                 except Exception as e:
