@@ -24,8 +24,10 @@ fi
 
 # Start the FastAPI server (extraction API)
 echo "Starting FastAPI Server..."
-# Port 7860 is required by Hugging Face Spaces
-export PORT=7860
+# Use PORT env variable if set (Render), otherwise default to 7860 (Hugging Face)
+if [ -z "$PORT" ]; then
+    export PORT=7860
+fi
 python -u scraper/main.py &
 FASTAPI_PID=$!
 
