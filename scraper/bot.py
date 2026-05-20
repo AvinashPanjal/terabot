@@ -31,7 +31,7 @@ PUBLIC_URL = os.getenv("RENDER_EXTERNAL_URL") or f"http://localhost:{PORT}"
 MAX_FILE_SIZE = 50000000
 
 # Regex to find Terabox domains
-TERABOX_REGEX = r"https?:\/\/(www\.)?(terabox\.com|teraboxapp\.com|1024tera\.com|nephobox\.com|4funbox\.com|mirrobox\.com|momerybox\.com|teraboxlink\.com|terafileshare\.com)[^\s]+"
+TERABOX_REGEX = r"https?:\/\/(www\.)?(terabox\.com|terabox\.app|teraboxapp\.com|1024tera\.com|nephobox\.com|4funbox\.com|mirrobox\.com|momerybox\.com|teraboxlink\.com|terafileshare\.com|terasharelink\.com|terasharefile\.com|terashare\.link|freeterabox\.com)[^\s]+"
 
 def init_db():
     conn = sqlite3.connect("users.db")
