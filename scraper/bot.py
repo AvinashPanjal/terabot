@@ -5,6 +5,7 @@ import httpx
 import sqlite3
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.request import HTTPXRequest
 from dotenv import load_dotenv
 
 from urllib.parse import quote
@@ -162,7 +163,11 @@ async def process_single_url(url: str, update: Update, user_ndus: str | None):
     task_id = str(uuid.uuid4())[:8]
     temp_filename = f"/tmp/temp_{update.message.message_id}_{task_id}.mp4"
     
-    status_msg = await update.message.reply_text(f"🔍 Extracting video from link: {url}\nThis might take up to 20 seconds...")
+    try:
+        status_msg = await update.message.reply_text(f"🔍 Extracting video from link: {url}\nThis might take up to 20 seconds...")
+    except Exception as e:
+        print(f"Failed to send initial status message for {url}: {e}")
+        return
     
     try:
         async with httpx.AsyncClient(timeout=180.0, follow_redirects=True) as client:
@@ -420,6 +425,15 @@ def main():
 
     print("Starting Telegram Bot...")
     local_api_url = os.getenv("TELEGRAM_LOCAL_API_URL")
+    # Use custom timeouts to prevent ConnectTimeout under high concurrency
+    request_config = HTTPXRequest(
+        connect_timeout=20.0,
+        read_timeout=20.0,
+        write_timeout=20.0,
+        pool_timeout=5.0,
+        media_write_timeout=60.0
+    )
+
     if local_api_url:
         print(f"Using Local Bot API Server: {local_api_url}")
         app = (
@@ -428,10 +442,11 @@ def main():
             .base_url(f"{local_api_url}/bot")
             .base_file_url(f"{local_api_url}/file/bot")
             .local_mode(True)
+            .request(request_config)
             .build()
         )
     else:
-        app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+        app = Application.builder().token(TELEGRAM_BOT_TOKEN).request(request_config).build()
 
     app.add_handler(CommandHandler("start", start, block=False))
     app.add_handler(CommandHandler("login", login, block=False))
