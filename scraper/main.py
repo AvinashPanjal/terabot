@@ -305,7 +305,21 @@ async def extract_url(req: ExtractRequest):
                 
             if target_ndus:
                 print(f"Injecting ndus cookie ({target_ndus[:8]}...) into Playwright browser context...")
-                domains = [".terabox.app", ".teraboxapp.com", ".1024tera.com", ".terafileshare.com", ".nephobox.com"]
+                domains = [
+                    ".terabox.app", 
+                    ".teraboxapp.com", 
+                    ".1024tera.com", 
+                    ".terafileshare.com", 
+                    ".nephobox.com",
+                    ".4funbox.com",
+                    ".mirrobox.com",
+                    ".momerybox.com",
+                    ".teraboxlink.com",
+                    ".terasharelink.com",
+                    ".terasharefile.com",
+                    ".terashare.link",
+                    ".freeterabox.com"
+                ]
                 await context.add_cookies([{
                     "name": "ndus",
                     "value": target_ndus,

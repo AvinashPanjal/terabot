@@ -411,7 +411,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     full_urls = re.findall(r"(https?://[^\s]+)", text)
-    terabox_urls = [u for u in full_urls if any(d in u for d in ["terabox", "1024tera", "nephobox", "4funbox", "mirrobox", "momerybox", "terafileshare"])]
+    terabox_urls = [u for u in full_urls if any(d in u for d in ["terabox", "1024tera", "nephobox", "4funbox", "mirrobox", "momerybox", "terafileshare", "terashare", "freeterabox"])]
 
     if not terabox_urls:
         return
