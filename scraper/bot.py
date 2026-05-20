@@ -411,6 +411,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asyncio.create_task(process_single_url(url, update, user_ndus))
 
 def main():
+    import time
+    print("Waiting 5 seconds for network interface to stabilize...")
+    time.sleep(5)
+    
     if not TELEGRAM_BOT_TOKEN:
         print("ERROR: TELEGRAM_BOT_TOKEN is missing from .env file!")
         return
@@ -454,7 +458,7 @@ def main():
     app.add_handler(MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle_message, block=False))
 
     print("Bot is polling for messages. Press Ctrl+C to stop.")
-    app.run_polling()
+    app.run_polling(bootstrap_retries=5)
 
 if __name__ == "__main__":
     import sys
