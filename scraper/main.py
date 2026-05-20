@@ -2,6 +2,19 @@ import os
 import sys
 import asyncio
 
+# Monkeypatch socket to force IPv4 DNS resolution (prevents container IPv6 connection timeouts)
+import socket
+orig_getaddrinfo = socket.getaddrinfo
+def patched_getaddrinfo(*args, **kwargs):
+    args_list = list(args)
+    if len(args_list) >= 3:
+        args_list[2] = socket.AF_INET
+    else:
+        kwargs['family'] = socket.AF_INET
+    return orig_getaddrinfo(*args_list, **kwargs)
+socket.getaddrinfo = patched_getaddrinfo
+
+
 # Set Playwright browsers path inside the project root for Render compatibility
 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pw-browsers")
 

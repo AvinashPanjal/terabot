@@ -8,6 +8,18 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 from telegram.request import HTTPXRequest
 from dotenv import load_dotenv
 
+# Monkeypatch socket to force IPv4 DNS resolution (prevents container IPv6 connection timeouts)
+import socket
+orig_getaddrinfo = socket.getaddrinfo
+def patched_getaddrinfo(*args, **kwargs):
+    args_list = list(args)
+    if len(args_list) >= 3:
+        args_list[2] = socket.AF_INET
+    else:
+        kwargs['family'] = socket.AF_INET
+    return orig_getaddrinfo(*args_list, **kwargs)
+socket.getaddrinfo = patched_getaddrinfo
+
 from urllib.parse import quote
 
 load_dotenv()
@@ -429,13 +441,15 @@ def main():
 
     print("Starting Telegram Bot...")
     local_api_url = os.getenv("TELEGRAM_LOCAL_API_URL")
-    # Use custom timeouts to prevent ConnectTimeout under high concurrency
+    # Use custom timeouts and automatic transport-level retries to prevent network blips/timeouts
+    transport = httpx.AsyncHTTPTransport(retries=3)
     request_config = HTTPXRequest(
         connect_timeout=20.0,
         read_timeout=20.0,
         write_timeout=20.0,
         pool_timeout=5.0,
-        media_write_timeout=60.0
+        media_write_timeout=60.0,
+        httpx_kwargs={"transport": transport}
     )
 
     if local_api_url:
