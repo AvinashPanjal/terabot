@@ -175,11 +175,52 @@ async def cleanup_loop():
             print(f"Error cleaning old temp files: {e}")
         await asyncio.sleep(1800) # Check every 30 minutes
 
+# Playwright global browser context variables
+playwright_instance = None
+browser_context = None
+
 @app.on_event("startup")
 async def startup_event():
     # Cookie verification is disabled since we run in guest/cookie-free mode
     # asyncio.create_task(keep_alive_task())
     asyncio.create_task(cleanup_loop())
+    
+    # Pre-launch Playwright browser context on startup to keep it warm and fast
+    global playwright_instance, browser_context
+    try:
+        print("Pre-launching global Playwright browser context...")
+        playwright_instance = await async_playwright().start()
+        user_data_dir = os.path.join(os.path.dirname(__file__), "browser_session")
+        browser_context = await playwright_instance.chromium.launch_persistent_context(
+            user_data_dir=user_data_dir,
+            headless=True,
+            args=[
+                "--autoplay-policy=no-user-gesture-required", 
+                "--mute-audio",
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-web-security"
+            ],
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+        )
+        print("Global Playwright browser context launched successfully.")
+    except Exception as e:
+        print(f"Failed to pre-launch global Playwright browser: {e}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global playwright_instance, browser_context
+    if browser_context:
+        try:
+            await browser_context.close()
+        except:
+            pass
+    if playwright_instance:
+        try:
+            await playwright_instance.stop()
+        except:
+            pass
 
 @app.head("/")
 @app.get("/")
@@ -232,16 +273,19 @@ async def extract_url(req: ExtractRequest):
     filename = "video.mp4"
     cookie_string = ""
 
-    global playwright_semaphore
+    global playwright_instance, browser_context, playwright_semaphore
     if playwright_semaphore is None:
-        playwright_semaphore = asyncio.Semaphore(1)
+        # We increase concurrency to 3 since we share the browser and only open tabs (very lightweight)
+        playwright_semaphore = asyncio.Semaphore(3)
 
     await playwright_semaphore.acquire()
     try:
-        async with async_playwright() as p:
+        # Self-healing logic to relaunch browser if it closed/crashed
+        if not browser_context:
+            if not playwright_instance:
+                playwright_instance = await async_playwright().start()
             user_data_dir = os.path.join(os.path.dirname(__file__), "browser_session")
-            
-            context = await p.chromium.launch_persistent_context(
+            browser_context = await playwright_instance.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 headless=True,
                 args=[
@@ -254,146 +298,162 @@ async def extract_url(req: ExtractRequest):
                 ],
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
             )
+
+        page = await browser_context.new_page()
+        
+        async def handle_request(route, request):
+            nonlocal direct_url
+            req_url = request.url
             
-            if len(context.pages) > 0:
-                page = context.pages[0]
-            else:
-                page = await context.new_page()
+            # Print intercepted URLs containing relevant keywords for debugging
+            if any(kw in req_url.lower() for kw in ["download", "video", "stream", "pcs", "m3u8", ".mp4", "api/szfile", "sharing"]) or request.resource_type == "media":
+                print(f"[Intercepted Request] Type: {request.resource_type} | URL: {req_url}")
 
-            async def handle_request(route, request):
-                nonlocal direct_url
-                req_url = request.url
-                
-                # Print intercepted URLs containing relevant keywords for debugging
-                if any(kw in req_url.lower() for kw in ["download", "video", "stream", "pcs", "m3u8", ".mp4", "api/szfile", "sharing"]) or request.resource_type == "media":
-                    print(f"[Intercepted Request] Type: {request.resource_type} | URL: {req_url}")
-
-                if "google.com" in req_url or "doubleclick.net" in req_url or "analytics" in req_url:
-                    await route.continue_()
-                    return
-                
-                if request.resource_type in ["image", "stylesheet", "font", "script"]:
-                    await route.continue_()
-                    return
-
-                if ".ts" in req_url or "_ts/" in req_url:
-                    await route.continue_()
-                    return
-
-                if "SUBTITLE" in req_url or "subtitle" in req_url or ".srt" in req_url:
-                    await route.continue_()
-                    return
-
-                if "api/download" in req_url or "type=D" in req_url or ".m3u8" in req_url or "type=M3U8" in req_url or ("freeterabox.com" in req_url and "video" in req_url):
-                    if any(domain in req_url for domain in ["terabox", "baidupcs", "freeterabox", "baidu.com", "pcs", "teraboxcdn"]):
-                        if "thumbnail" not in req_url and "favicon" not in req_url:
-                            if not direct_url:
-                                direct_url = req_url
+            if "google.com" in req_url or "doubleclick.net" in req_url or "analytics" in req_url:
                 await route.continue_()
+                return
+            
+            if request.resource_type in ["image", "stylesheet", "font", "script"]:
+                await route.continue_()
+                return
 
-            await page.route("**/*", handle_request)
+            if ".ts" in req_url or "_ts/" in req_url:
+                await route.continue_()
+                return
 
-            # Pre-resolve redirects to bypass middleman domain timeouts
+            if "SUBTITLE" in req_url or "subtitle" in req_url or ".srt" in req_url:
+                await route.continue_()
+                return
+
+            req_url_lower = req_url.lower()
+            if "api/download" in req_url_lower or "type=d" in req_url_lower or ".m3u8" in req_url_lower or "type=m3u8" in req_url_lower or "sharing" in req_url_lower or "pcs.baidu.com" in req_url_lower:
+                if any(domain in req_url_lower for domain in ["terabox", "baidupcs", "freeterabox", "baidu.com", "pcs", "teraboxcdn"]):
+                    if "thumbnail" not in req_url_lower and "favicon" not in req_url_lower:
+                        if not direct_url:
+                            direct_url = req_url
+            await route.continue_()
+
+        await page.route("**/*", handle_request)
+
+        # Pre-resolve redirects using instant URL rewriting to bypass HTTP bottlenecks
+        surl = extract_surl(url)
+        if surl:
+            target_url = f"https://www.1024tera.com/sharing/link?surl={surl}"
+            print(f"Pre-resolved {url} -> {target_url}")
+        else:
             target_url = url
-            try:
-                async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as client:
-                    resp = await client.get(url)
-                    target_url = str(resp.url)
-                    print(f"Pre-resolved {url} to {target_url}")
-            except Exception as e:
-                print(f"Could not pre-resolve redirect: {e}")
 
-            print(f"Navigating to {target_url} ...")
-            try:
-                await page.goto(target_url, wait_until="domcontentloaded", timeout=30000)
-                print("Page loaded.")
-            except Exception as e:
-                print(f"Playwright error during goto: {e}")
+        print(f"Navigating to {target_url} ...")
+        try:
+            await page.goto(target_url, wait_until="domcontentloaded", timeout=20000)
+            print("Page loaded.")
+        except Exception as e:
+            print(f"Playwright error during goto: {e}")
 
-            print("Waiting for direct_url interception...")
-            for _ in range(15):
-                if direct_url:
-                    break
-                await page.wait_for_timeout(1000)
+        print("Waiting for direct_url interception...")
+        for _ in range(10):
+            if direct_url:
+                break
+            await page.wait_for_timeout(1000)
+            
+        if not direct_url:
+            print("No direct_url yet. Checking if we are in file list view...")
+            try:
+                file_row = await page.wait_for_selector('.file-name, .file-list-row, .wp-s-core-pan-file-list-item, .wp-s-pan-file-list-row', timeout=5000)
+                if file_row:
+                    print("Found file list row. Clicking it to open video player...")
+                    await file_row.click()
+                    await page.wait_for_timeout(2000)
+            except Exception:
+                print("Did not find file list row.")
+
+        if not direct_url:
+            print("Checking for video element...")
+            try:
+                await page.wait_for_selector("video", timeout=10000)
+                print("Video element found! Forcing play and removing dialog blocks...")
                 
-            if not direct_url:
-                print("No direct_url yet. Checking if we are in file list view...")
-                try:
-                    file_row = await page.wait_for_selector('.file-name, .file-list-row, .wp-s-core-pan-file-list-item, .wp-s-pan-file-list-row', timeout=20000)
-                    if file_row:
-                        print("Found file list row. Clicking it to open video player...")
-                        await file_row.click()
-                        await page.wait_for_timeout(3000)
-                except Exception:
-                    print("Did not find file list row.")
-
-            if not direct_url:
-                print("Checking for video element...")
-                try:
-                    await page.wait_for_selector("video", timeout=30000)
-                    print("Video element found! Forcing play...")
-                    await page.evaluate("() => { const v = document.querySelector('video'); if(v){ v.muted = true; v.play(); } }")
-                    
-                    # Check if the video tag's src contains a direct URL directly
-                    video_src = await page.evaluate("() => { const v = document.querySelector('video'); return v ? v.src : null; }")
-                    if video_src and video_src.startswith("http") and not video_src.startswith("blob"):
-                        print(f"Captured direct URL from video src attribute: {video_src}")
-                        direct_url = video_src
-                    
-                    async def keep_playing():
-                        for _ in range(5):
-                            if direct_url:
-                                break
-                            await asyncio.sleep(2)
-                            try:
-                                await page.evaluate("() => { const v = document.querySelector('video'); if(v && v.paused){ v.play(); } }")
-                            except:
-                                pass
-                    asyncio.create_task(keep_playing())
-                    
-                    print("Waiting 10s for stream to load...")
+                # Active background task to remove any overlays/popups and play video
+                async def keep_playing():
                     for _ in range(10):
                         if direct_url:
-                            print("Stream loaded!")
                             break
-                        # Re-check src attribute if it changed dynamically
-                        video_src = await page.evaluate("() => { const v = document.querySelector('video'); return v ? v.src : null; }")
-                        if video_src and video_src.startswith("http") and not video_src.startswith("blob"):
-                            print(f"Captured direct URL dynamically from video src: {video_src}")
-                            direct_url = video_src
-                            break
-                        await page.wait_for_timeout(1000)
-                except Exception as e:
-                    print(f"Video element error or timeout: {e}")
-
-            if not direct_url:
-                print("Checking for Download button as fallback...")
-                try:
-                    dl_btn = await page.wait_for_selector('a.download-btn, a[title="Download"], button[title="Download"], .download-btn', timeout=5000)
-                    if dl_btn:
-                        print("Found download button! Clicking...")
+                        await asyncio.sleep(1.5)
                         try:
-                            async with page.expect_download(timeout=10000) as download_info:
-                                await dl_btn.click()
-                            download = await download_info.value
-                            direct_url = download.url
-                        except Exception:
-                            href = await dl_btn.get_attribute("href")
-                            if href and href != "javascript:void(0);":
-                                direct_url = href
-                            else:
-                                await dl_btn.click()
-                                await page.wait_for_timeout(3000)
-                except Exception:
-                    print("Download button not found.")
-            
-            if direct_url and direct_url.startswith("/"):
-                direct_url = "https://www.1024tera.com" + direct_url
+                            await page.evaluate("""() => {
+                                // Delete/hide any overlay blocks, login dialogs, and masks
+                                const classesToHide = ['login', 'modal', 'dialog', 'popup', 'overlay', 'mask', 'passport'];
+                                document.querySelectorAll('*').forEach(el => {
+                                    if (el && el.className && typeof el.className === 'string') {
+                                        if (classesToHide.some(cls => el.className.toLowerCase().includes(cls))) {
+                                            if (!el.contains(document.querySelector('video'))) {
+                                                el.style.setProperty('display', 'none', 'important');
+                                            }
+                                        }
+                                    }
+                                    if (el && el.id && typeof el.id === 'string') {
+                                        if (classesToHide.some(cls => el.id.toLowerCase().includes(cls))) {
+                                            if (!el.contains(document.querySelector('video'))) {
+                                                el.style.setProperty('display', 'none', 'important');
+                                            }
+                                        }
+                                    }
+                                });
+                                
+                                // Force unmute and play the video element
+                                const v = document.querySelector('video');
+                                if (v) {
+                                    v.muted = true;
+                                    v.play().catch(() => {});
+                                }
+                            }""")
+                        except:
+                            pass
                 
-            cookies = await context.cookies()
-            cookie_string = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
+                asyncio.create_task(keep_playing())
+                
+                # Check for direct URL
+                for _ in range(15):
+                    if direct_url:
+                        break
+                    # Re-check src attribute if it changed dynamically
+                    video_src = await page.evaluate("() => { const v = document.querySelector('video'); return v ? v.src : null; }")
+                    if video_src and video_src.startswith("http") and not video_src.startswith("blob"):
+                        print(f"Captured direct URL dynamically from video src: {video_src}")
+                        direct_url = video_src
+                        break
+                    await page.wait_for_timeout(1000)
+            except Exception as e:
+                print(f"Video element error or timeout: {e}")
 
-            await context.close()
+        if not direct_url:
+            print("Checking for Download button as fallback...")
+            try:
+                dl_btn = await page.wait_for_selector('a.download-btn, a[title="Download"], button[title="Download"], .download-btn', timeout=4000)
+                if dl_btn:
+                    print("Found download button! Clicking...")
+                    try:
+                        async with page.expect_download(timeout=6000) as download_info:
+                            await dl_btn.click()
+                        download = await download_info.value
+                        direct_url = download.url
+                    except Exception:
+                        href = await dl_btn.get_attribute("href")
+                        if href and href != "javascript:void(0);":
+                            direct_url = href
+                        else:
+                            await dl_btn.click()
+                            await page.wait_for_timeout(2000)
+            except Exception:
+                print("Download button not found.")
+        
+        if direct_url and direct_url.startswith("/"):
+            direct_url = "https://www.1024tera.com" + direct_url
+            
+        cookies = await browser_context.cookies()
+        cookie_string = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
+
+        await page.close()
             
     except Exception as e:
         print(f"Playwright error: {e}")
