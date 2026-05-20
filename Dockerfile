@@ -1,25 +1,4 @@
-# Stage 1: Build telegram-bot-api from source
-FROM debian:bookworm-slim AS builder
-
-RUN apt-get update && apt-get install -y \
-    make \
-    git \
-    cmake \
-    g++ \
-    libssl-dev \
-    zlib1g-dev \
-    gperf \
-    php-cli \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN git clone --recursive https://github.com/tdlib/telegram-bot-api.git \
-    && cd telegram-bot-api \
-    && mkdir build \
-    && cd build \
-    && cmake -DCMAKE_BUILD_TYPE=Release .. \
-    && cmake --build . --target install -- -j 1
-
-# Stage 2: Final runtime image
+# Final runtime image
 FROM python:3.11-slim-bookworm
 
 # Install system dependencies (including ffmpeg and runtime libraries)
@@ -30,9 +9,6 @@ RUN apt-get update && apt-get install -y \
     libstdc++6 \
     curl \
     && rm -rf /var/lib/apt/lists/*
-
-# Copy the telegram-bot-api binary from stage 1
-COPY --from=builder /usr/local/bin/telegram-bot-api /usr/local/bin/telegram-bot-api
 
 # Set the working directory
 WORKDIR /app

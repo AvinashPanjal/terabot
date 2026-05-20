@@ -1,48 +1,21 @@
 #!/bin/bash
 
 # Ensure we have the required API credentials
-if [ -z "$TELEGRAM_API_ID" ] || [ -z "$TELEGRAM_API_HASH" ] || [ -z "$TELEGRAM_BOT_TOKEN" ]; then
-    echo "ERROR: TELEGRAM_API_ID, TELEGRAM_API_HASH, and TELEGRAM_BOT_TOKEN environment variables are required!"
+if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
+    echo "ERROR: TELEGRAM_BOT_TOKEN environment variable is required!"
     exit 1
 fi
 
 # Export PYTHONUNBUFFERED to ensure all python logs print immediately
 export PYTHONUNBUFFERED=1
 
-# Log out the bot from the official Telegram API servers to prevent conflicts
-echo "Logging out bot from official Telegram servers..."
-curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/logOut"
-echo ""
-
-# Create directory for Telegram Bot API storage in /tmp (writable by anyone)
-mkdir -p /tmp/telegram-bot-api-data
-chmod -R 777 /tmp/telegram-bot-api-data
-
-# Create log file and stream it to stdout in background
-touch /tmp/telegram-bot-api.log
-tail -f /tmp/telegram-bot-api.log &
-TAIL_PID=$!
-trap 'kill $TAIL_PID 2>/dev/null' EXIT
-
-# Start the Local Telegram Bot API Server
-echo "Starting Telegram Bot API Server..."
-telegram-bot-api \
-  --api-id="$TELEGRAM_API_ID" \
-  --api-hash="$TELEGRAM_API_HASH" \
-  --local \
-  --dir=/tmp/telegram-bot-api-data \
-  --http-port=8081 > /tmp/telegram-bot-api.log 2>&1 &
-API_SERVER_PID=$!
-
-# Wait for it to boot and verify it's running
-sleep 3
-if ! kill -0 $API_SERVER_PID 2>/dev/null; then
-    echo "ERROR: telegram-bot-api server failed to start! Exited immediately."
-    exit 1
-fi
-
-# Set the local Bot API URL for bot.py to pick up
-export TELEGRAM_LOCAL_API_URL="http://localhost:8081"
+# Log out the bot from the official Telegram API servers first to reset connection if needed
+# (Only run if user wanted, but since we use official server, we do not need to log out/in.
+# Actually, if we use the official Telegram API, calling logOut will make the bot token invalid for 10-15 minutes on official servers!
+# WAIT! Yes, calling logOut on official API servers actually logs out the bot and revokes active sessions, but the bot token is still valid.
+# But wait, we DO NOT need to call /logOut anymore because we are not using a local server!
+# Calling logOut will log us out of the official server, meaning we have to wait a while or it might cause login issues.)
+# So we REMOVE the logOut call entirely!
 
 # Set the external URL for download links
 if [ -n "$SPACE_HOST" ]; then
