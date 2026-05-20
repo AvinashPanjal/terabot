@@ -455,14 +455,27 @@ async def extract_url(req: ExtractRequest):
 @app.get("/logs", response_class=HTMLResponse)
 async def get_logs():
     import os
-    if os.path.exists("app.log"):
+    paths_to_check = [
+        "app.log",
+        "../app.log",
+        "/opt/render/project/src/app.log",
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), "app.log"),
+        os.path.join(os.path.dirname(__file__), "app.log")
+    ]
+    log_file_path = None
+    for p in paths_to_check:
+        if os.path.exists(p):
+            log_file_path = p
+            break
+            
+    if log_file_path:
         try:
-            with open("app.log", "r", encoding="utf-8") as f:
+            with open(log_file_path, "r", encoding="utf-8") as f:
                 content = f.read()
-            return f"<html><body><h3>Application Logs</h3><pre>{content}</pre></body></html>"
+            return f"<html><body><h3>Application Logs (Path: {log_file_path})</h3><pre>{content}</pre></body></html>"
         except Exception as e:
-            return f"Error reading logs: {e}"
-    return "No logs found."
+            return f"Error reading logs at {log_file_path}: {e}"
+    return f"No logs found. Checked paths: {paths_to_check}"
 
 @app.get("/player", response_class=HTMLResponse)
 async def player_page(url: str, cookies: str = "", filename: str = "Video Player"):
