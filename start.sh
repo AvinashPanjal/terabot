@@ -23,35 +23,35 @@ if [ -n "$SPACE_HOST" ]; then
 fi
 
 # Create an empty log file
-touch app.log
+touch /tmp/app.log
 
 # Start the FastAPI server (extraction API)
-echo "Starting FastAPI Server..." | tee -a app.log
+echo "Starting FastAPI Server..." | tee -a /tmp/app.log
 # Use PORT env variable if set (Render), otherwise default to 7860 (Hugging Face)
 if [ -z "$PORT" ]; then
     export PORT=7860
 fi
-python -u scraper/main.py >> app.log 2>&1 &
+python -u scraper/main.py >> /tmp/app.log 2>&1 &
 FASTAPI_PID=$!
 
 # Wait for FastAPI to start and verify it's running
 sleep 3
 if ! kill -0 $FASTAPI_PID 2>/dev/null; then
-    echo "ERROR: FastAPI server failed to start!" | tee -a app.log
-    cat app.log
+    echo "ERROR: FastAPI server failed to start!" | tee -a /tmp/app.log
+    cat /tmp/app.log
     exit 1
 fi
 
 # Start the Telegram Bot
-echo "Starting Telegram Bot..." | tee -a app.log
-python -u scraper/bot.py >> app.log 2>&1 &
+echo "Starting Telegram Bot..." | tee -a /tmp/app.log
+python -u scraper/bot.py >> /tmp/app.log 2>&1 &
 BOT_PID=$!
 
 # Trap signals to clean up background processes on exit
 trap 'kill $FASTAPI_PID $BOT_PID 2>/dev/null' EXIT
 
 # Start tailing the combined log in the foreground to stream to Render console
-tail -n +1 -f app.log &
+tail -n +1 -f /tmp/app.log &
 TAIL_PID=$!
 
 # Monitor background processes; if either crashes, exit start.sh
@@ -59,6 +59,6 @@ wait -n $FASTAPI_PID $BOT_PID
 
 # Exit code of the crashed process
 EXIT_STATUS=$?
-echo "ERROR: One of the background processes stopped with status $EXIT_STATUS. Exiting..." | tee -a app.log
+echo "ERROR: One of the background processes stopped with status $EXIT_STATUS. Exiting..." | tee -a /tmp/app.log
 kill $TAIL_PID 2>/dev/null
 exit $EXIT_STATUS

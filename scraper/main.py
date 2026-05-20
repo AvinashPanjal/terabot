@@ -456,6 +456,7 @@ async def extract_url(req: ExtractRequest):
 async def get_logs():
     import os
     paths_to_check = [
+        "/tmp/app.log",
         "app.log",
         "../app.log",
         "/opt/render/project/src/app.log",
