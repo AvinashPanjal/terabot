@@ -177,7 +177,8 @@ async def cleanup_loop():
 
 @app.on_event("startup")
 async def startup_event():
-    asyncio.create_task(keep_alive_task())
+    # Cookie verification is disabled since we run in guest/cookie-free mode
+    # asyncio.create_task(keep_alive_task())
     asyncio.create_task(cleanup_loop())
 
 @app.head("/")
@@ -215,78 +216,16 @@ async def status():
         "bot_api_running_port_8081": bot_api_running,
         "log_tail": log_content,
         "env_variables": {k: v for k, v in os.environ.items() if "TOKEN" not in k and "HASH" not in k and "API" not in k}
-    }
-
-@app.post("/api/extract")
+    }@app.post("/api/extract")
 async def extract_url(req: ExtractRequest):
     url = req.url
-    req_ndus = req.ndus
     if not url:
         raise HTTPException(status_code=400, detail="URL is required")
 
     print(f"Extraction request for link: {url}")
-    
-    # 1. TRY THE CLOUDFLARE WORKER PROXY FIRST (FAST & BYPASSES PREVIEW LIMIT/CAPTCHA)
-    try:
-        surl = extract_surl(url)
-        if not surl:
-            print("Could not extract surl, skipping proxy check.")
-        else:
-            print(f"Extracted surl: {surl}. Fetching cookies...")
-            if req_ndus:
-                cookies_dict = {"ndus": req_ndus}
-                ndus = req_ndus
-            else:
-                ndus = await get_next_cookie()
-                cookies_dict = {"ndus": ndus} if ndus else {}
-                
-            if not ndus:
-                print("ndus cookie not found. Cannot use proxy.")
-            else:
-                proxy_url = "https://tbx-proxy.shakir-ansarii075.workers.dev/"
-                params = {
-                    "mode": "resolve",
-                    "surl": surl,
-                    "raw": "1"
-                }
-                headers_proxy = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0"
-                }
-                print("Querying tbx-proxy Cloudflare Worker...")
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    res = await client.get(proxy_url, params=params, headers=headers_proxy, cookies={"ndus": ndus})
-                    
-                if res.status_code == 200:
-                    data = res.json()
-                    dlink = None
-                    filename = "video.mp4"
-                    
-                    if "upstream" in data and "list" in data["upstream"] and data["upstream"]["list"]:
-                        dlink = data["upstream"]["list"][0].get("dlink")
-                        filename = data["upstream"]["list"][0].get("server_filename", "video.mp4")
-                    elif "data" in data and "list" in data["data"] and data["data"]["list"]:
-                        dlink = data["data"]["list"][0].get("dlink")
-                        filename = data["data"]["list"][0].get("server_filename", "video.mp4")
-                        
-                    if dlink:
-                        print(f"Proxy successfully resolved dlink for {filename}!")
-                        cookie_string = "; ".join([f"{k}={v}" for k, v in cookies_dict.items()])
-                        return {
-                            "success": True,
-                            "directUrl": dlink,
-                            "filename": filename,
-                            "cookies": cookie_string
-                        }
-                    else:
-                        print("Proxy did not return a dlink. Response data:", data)
-                else:
-                    print(f"Proxy failed with status code {res.status_code}: {res.text}")
-    except Exception as e:
-        print(f"Error during proxy extraction attempt: {e}")
-        
-    print("Proxy extraction failed or skipped. Falling back to Playwright browser automation...")
+    print("Running cookie-free Playwright guest-mode automation...")
 
-    # 2. FALLBACK TO PLAYWRIGHT BROWSER AUTOMATION
+    # Playwright Guest-Mode Automation
     direct_url = None
     filename = "video.mp4"
     cookie_string = ""
@@ -313,37 +252,6 @@ async def extract_url(req: ExtractRequest):
                 ],
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
             )
-            
-            # Determine the ndus cookie to use: prefer custom user ndus, fallback to global pool ndus
-            target_ndus = req_ndus
-            if not target_ndus:
-                target_ndus = await get_next_cookie()
-                
-            if target_ndus:
-                print(f"Injecting ndus cookie ({target_ndus[:8]}...) into Playwright browser context...")
-                domains = [
-                    ".terabox.app", 
-                    ".teraboxapp.com", 
-                    ".1024tera.com", 
-                    ".terafileshare.com", 
-                    ".nephobox.com",
-                    ".4funbox.com",
-                    ".mirrobox.com",
-                    ".momerybox.com",
-                    ".teraboxlink.com",
-                    ".terasharelink.com",
-                    ".terasharefile.com",
-                    ".terashare.link",
-                    ".freeterabox.com"
-                ]
-                await context.add_cookies([{
-                    "name": "ndus",
-                    "value": target_ndus,
-                    "domain": d,
-                    "path": "/"
-                } for d in domains])
-            else:
-                print("Warning: No ndus cookie available for Playwright extraction fallback!")
             
             if len(context.pages) > 0:
                 page = context.pages[0]
