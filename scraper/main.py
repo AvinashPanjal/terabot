@@ -478,6 +478,26 @@ async def get_logs():
             return f"Error reading logs at {log_file_path}: {e}"
     return f"No logs found. Checked paths: {paths_to_check}"
 
+@app.get("/debug")
+async def debug_info():
+    import os, sys
+    try:
+        cwd = os.getcwd()
+        cwd_files = os.listdir('.')
+        tmp_files = os.listdir('/tmp') if os.path.exists('/tmp') else []
+        env_keys = list(os.environ.keys())
+        clean_env = {k: ("SET" if os.environ[k] else "EMPTY") for k in env_keys if "TOKEN" in k or "KEY" in k or "COOKIE" in k or "SECRET" in k}
+        return {
+            "cwd": cwd,
+            "cwd_files": cwd_files,
+            "tmp_files": tmp_files,
+            "python_version": sys.version,
+            "environment_keys": env_keys,
+            "masked_env": clean_env
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
 @app.get("/player", response_class=HTMLResponse)
 async def player_page(url: str, cookies: str = "", filename: str = "Video Player"):
     from urllib.parse import quote
