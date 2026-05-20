@@ -132,7 +132,7 @@ async def keep_alive_task():
                         "Cookie": f"ndus={ndus}",
                         "Referer": "https://www.terabox.app/"
                     }
-                    async with httpx.AsyncClient(timeout=15.0) as client:
+                    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
                         # Request the main page to keep the session active
                         res = await client.get("https://www.terabox.app/main", headers=headers)
                         if res.status_code == 200 and "login" not in str(res.url):
@@ -297,15 +297,22 @@ async def extract_url(req: ExtractRequest):
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
             )
             
-            if req_ndus:
-                # Inject the custom user cookie into the browser session
+            # Determine the ndus cookie to use: prefer custom user ndus, fallback to global pool ndus
+            target_ndus = req_ndus
+            if not target_ndus:
+                target_ndus = await get_next_cookie()
+                
+            if target_ndus:
+                print(f"Injecting ndus cookie ({target_ndus[:8]}...) into Playwright browser context...")
                 domains = [".terabox.app", ".teraboxapp.com", ".1024tera.com", ".terafileshare.com", ".nephobox.com"]
                 await context.add_cookies([{
                     "name": "ndus",
-                    "value": req_ndus,
+                    "value": target_ndus,
                     "domain": d,
                     "path": "/"
                 } for d in domains])
+            else:
+                print("Warning: No ndus cookie available for Playwright extraction fallback!")
             
             if len(context.pages) > 0:
                 page = context.pages[0]
