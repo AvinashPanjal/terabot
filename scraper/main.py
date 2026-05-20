@@ -164,6 +164,7 @@ async def startup_event():
     asyncio.create_task(keep_alive_task())
     asyncio.create_task(cleanup_loop())
 
+@app.head("/")
 @app.get("/")
 async def root():
     return {"status": "healthy", "service": "terabox-downloader"}
