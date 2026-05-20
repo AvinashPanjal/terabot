@@ -427,6 +427,15 @@ def main():
     print("Waiting 5 seconds for network interface to stabilize...")
     time.sleep(5)
     
+    # Initialize static-ffmpeg to download and add ffmpeg/ffprobe to system PATH
+    try:
+        import static_ffmpeg
+        print("Initializing static-ffmpeg...")
+        static_ffmpeg.add_paths()
+        print("static-ffmpeg initialized successfully.")
+    except Exception as ffmpeg_err:
+        print(f"Warning: Failed to initialize static-ffmpeg: {ffmpeg_err}")
+    
     if not TELEGRAM_BOT_TOKEN:
         print("ERROR: TELEGRAM_BOT_TOKEN is missing from .env file!")
         return

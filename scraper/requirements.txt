@@ -4,3 +4,5 @@ playwright
 python-telegram-bot
 httpx
 python-dotenv
+yt-dlp
+static-ffmpeg
