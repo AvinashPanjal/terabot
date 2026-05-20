@@ -451,6 +451,18 @@ async def extract_url(req: ExtractRequest):
         "cookies": cookie_string
     }
 
+@app.get("/logs", response_class=HTMLResponse)
+async def get_logs():
+    import os
+    if os.path.exists("app.log"):
+        try:
+            with open("app.log", "r", encoding="utf-8") as f:
+                content = f.read()
+            return f"<html><body><h3>Application Logs</h3><pre>{content}</pre></body></html>"
+        except Exception as e:
+            return f"Error reading logs: {e}"
+    return "No logs found."
+
 @app.get("/player", response_class=HTMLResponse)
 async def player_page(url: str, cookies: str = "", filename: str = "Video Player"):
     from urllib.parse import quote

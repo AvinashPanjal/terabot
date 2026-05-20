@@ -51,7 +51,7 @@ BOT_PID=$!
 trap 'kill $FASTAPI_PID $BOT_PID 2>/dev/null' EXIT
 
 # Start tailing the combined log in the foreground to stream to Render console
-tail -f app.log &
+tail -n +1 -f app.log &
 TAIL_PID=$!
 
 # Monitor background processes; if either crashes, exit start.sh
