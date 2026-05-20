@@ -95,10 +95,13 @@ ndus_env = os.getenv("TERABOX_NDUS")
 if ndus_env:
     NDUS_POOL = [c.strip() for c in ndus_env.split(",") if c.strip()]
 
+# Initialize healthy cookies list with configured cookies
+HEALTHY_COOKIES = list(NDUS_POOL)
+
 cookie_index = 0
 
 async def get_all_cookies() -> list:
-    pool = list(NDUS_POOL)
+    pool = list(HEALTHY_COOKIES)
     # Fallback to local Playwright browser cookies if pool is empty
     if not pool:
         pw_cookies = await get_browser_cookies()
@@ -117,15 +120,24 @@ async def get_next_cookie() -> str:
     return cookie
 
 async def keep_alive_task():
+    global HEALTHY_COOKIES
     # Wait a few seconds for server startup
     await asyncio.sleep(5)
     while True:
-        pool = await get_all_cookies()
-        if not pool:
+        pool_to_verify = list(NDUS_POOL)
+        if not pool_to_verify:
+            pw_cookies = await get_browser_cookies()
+            pw_ndus = pw_cookies.get("ndus")
+            if pw_ndus:
+                pool_to_verify = [pw_ndus]
+
+        if not pool_to_verify:
             print("Keep-alive check: No cookies configured in the pool.")
+            HEALTHY_COOKIES = []
         else:
-            print(f"Keep-alive check: Verifying {len(pool)} cookies in the pool...")
-            for i, ndus in enumerate(pool):
+            print(f"Keep-alive check: Verifying {len(pool_to_verify)} cookies in the pool...")
+            active_cookies = []
+            for i, ndus in enumerate(pool_to_verify):
                 try:
                     headers = {
                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -137,10 +149,14 @@ async def keep_alive_task():
                         res = await client.get("https://www.terabox.app/main", headers=headers)
                         if res.status_code == 200 and "login" not in str(res.url):
                             print(f"Cookie #{i+1} ({ndus[:8]}...): Active & Healthy")
+                            active_cookies.append(ndus)
                         else:
                             print(f"Cookie #{i+1} ({ndus[:8]}...): Expired or Invalid! (Status: {res.status_code}, URL: {res.url})")
                 except Exception as e:
                     print(f"Cookie #{i+1} ({ndus[:8]}...): Error during keep-alive: {e}")
+                    # Keep it in pool on network errors to be safe
+                    active_cookies.append(ndus)
+            HEALTHY_COOKIES = active_cookies
         # Sleep for 10 minutes
         await asyncio.sleep(600)
 
