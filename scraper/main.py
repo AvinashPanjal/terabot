@@ -197,8 +197,14 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
                     await arrow.tap()
                     await page.wait_for_timeout(1000)
                     
-                # Tap envelope button (the second .other-item represents the Mail login form)
-                other_items = await page.query_selector_all(".other-item")
+                # Wait for both envelope buttons to mount/render to avoid race conditions
+                other_items = []
+                for _ in range(10): # up to 5 seconds
+                    other_items = await page.query_selector_all(".other-item")
+                    if len(other_items) >= 2:
+                        break
+                    await page.wait_for_timeout(500)
+                    
                 if len(other_items) >= 2:
                     print("Tapping the second envelope button (Mail)...")
                     await other_items[1].tap()
