@@ -1032,6 +1032,19 @@ async def download_file(
         headers={"Content-Disposition": f'attachment; filename="{filename or "video.mp4"}"'}
     )
 
+@app.get("/api/env_check")
+async def env_check():
+    email = os.getenv("TERABOX_EMAIL") or ""
+    password = os.getenv("TERABOX_PASSWORD") or ""
+    return {
+        "email_len": len(email),
+        "email_prefix": email[:3],
+        "email_suffix": email[-3:],
+        "password_len": len(password),
+        "password_prefix": password[:3],
+        "password_suffix": password[-3:]
+    }
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
