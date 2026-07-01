@@ -657,6 +657,70 @@ async def debug_info():
     except Exception as e:
         return {"error": str(e)}
 
+@app.get("/api/run_diag")
+async def run_diag():
+    import os
+    from playwright.async_api import async_playwright
+    
+    results = {}
+    try:
+        async with async_playwright() as p:
+            user_data_dir = os.path.join(os.path.dirname(__file__), "login_session_dump")
+            context = await p.chromium.launch_persistent_context(
+                user_data_dir=user_data_dir,
+                headless=True,
+                viewport={"width": 375, "height": 812},
+                args=[
+                    "--autoplay-policy=no-user-gesture-required", 
+                    "--mute-audio",
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-web-security"
+                ],
+                user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
+            )
+            page = await context.new_page()
+            try:
+                await page.goto("https://www.1024tera.com/wap/outside/login", wait_until="domcontentloaded", timeout=20000)
+                await page.wait_for_timeout(4000)
+                
+                # Check for arrow
+                arrow = await page.query_selector(".icon-arrow")
+                arrow_found = arrow is not None
+                if arrow:
+                    await arrow.tap()
+                    await page.wait_for_timeout(2000)
+                
+                # Capture screenshot
+                diag_screenshot = os.path.join(os.path.dirname(__file__), "diag_tap_result.png")
+                await page.screenshot(path=diag_screenshot)
+                
+                # Dump HTML of body or login container
+                body_content = await page.evaluate("""() => {
+                    const el = document.querySelector('.wap-login-home') || document.body;
+                    return el ? el.outerHTML : 'No element found';
+                }""")
+                
+                dump_path = os.path.join(os.path.dirname(__file__), "dom_dump.txt")
+                with open(dump_path, "w", encoding="utf-8") as f:
+                    f.write(body_content)
+                    
+                results = {
+                    "success": True,
+                    "arrow_found": arrow_found,
+                    "body_html_len": len(body_content),
+                    "screenshot_saved": os.path.exists(diag_screenshot),
+                    "dump_saved": os.path.exists(dump_path)
+                }
+            except Exception as inner_e:
+                results = {"success": False, "error": str(inner_e)}
+            finally:
+                await context.close()
+    except Exception as outer_e:
+        results = {"success": False, "error": str(outer_e)}
+    return results
+
 @app.get("/player", response_class=HTMLResponse)
 async def player_page(url: str, cookies: str = "", filename: str = "Video Player"):
     from urllib.parse import quote
