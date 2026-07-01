@@ -169,16 +169,16 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
                     try:
                         arrow = await page.wait_for_selector(".icon-arrow", timeout=4000)
                         if arrow:
-                            await arrow.click()
+                            await arrow.tap()
                             await page.wait_for_timeout(1000)
                     except Exception:
                         print("No expand arrow found or timed out.")
                         
-                    # Click email form envelope button (other-item) if present
+                    # Tap email form envelope button (other-item) if present
                     try:
                         other_item = await page.wait_for_selector(".other-item", timeout=4000)
                         if other_item:
-                            await other_item.click()
+                            await other_item.tap()
                             await page.wait_for_timeout(1500)
                     except Exception:
                         print("No other-item button found or timed out.")
@@ -188,10 +188,10 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
                 await page.fill('input[placeholder="Enter your new password."]', password)
                 await page.wait_for_timeout(1000)
                 
-                # Click Login
+                # Tap Login
                 login_btn = await page.wait_for_selector(".btn-class-login", timeout=5000)
                 if login_btn:
-                    await login_btn.click()
+                    await login_btn.tap()
                     print("Automated login submitted. Waiting for session cookies...")
                     
                     ndus = None
