@@ -200,7 +200,7 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
                 # Wait for both envelope buttons to mount/render to avoid race conditions
                 other_items = []
                 for _ in range(10): # up to 5 seconds
-                    other_items = await page.query_selector_all(".other-item")
+                    other_items = await page.query_selector_all(".other-item .logo")
                     if len(other_items) >= 2:
                         break
                     await page.wait_for_timeout(500)
