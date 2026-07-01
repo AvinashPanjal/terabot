@@ -162,21 +162,7 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
             
         page = await browser_context.new_page()
         
-        # Route to block heavy resources and tracking scripts to save RAM and CPU
-        async def block_resources(route, request):
-            req_url = request.url.lower()
-            if any(x in req_url for x in [
-                "analytics", "googleads", "doubleclick", "facebook.net", "facebook.com", 
-                "bat.bing", "bing.com", "beacon", "telemetry"
-            ]):
-                await route.abort()
-                return
-            if request.resource_type in ["image", "font", "media"]:
-                await route.abort()
-                return
-            await route.continue_()
-            
-        await page.route("**/*", block_resources)
+
 
         try:
             # Navigate with retries to handle startup bandwidth saturation (e.g. static-ffmpeg download)
@@ -260,8 +246,10 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
         print(f"Error during automated login: {e}")
     return None
 
+login_lock = asyncio.Lock()
+
 async def ensure_active_cookie() -> str | None:
-    global CURRENT_NDUS, HEALTHY_COOKIES
+    global CURRENT_NDUS, HEALTHY_COOKIES, login_lock
     
     # 1. Check if the existing cached cookie is valid
     if CURRENT_NDUS:
@@ -279,15 +267,22 @@ async def ensure_active_cookie() -> str | None:
             CURRENT_NDUS = ndus
             return CURRENT_NDUS
             
-    # 3. Trigger automated login if credentials are set
+    # 3. Trigger automated login if credentials are set (guarded by lock)
     if TERABOX_EMAIL and TERABOX_PASSWORD:
-        new_ndus = await login_and_get_cookie(TERABOX_EMAIL, TERABOX_PASSWORD)
-        if new_ndus:
-            CURRENT_NDUS = new_ndus
-            # Update the cookie lists
-            if new_ndus not in HEALTHY_COOKIES:
-                HEALTHY_COOKIES.append(new_ndus)
-            return new_ndus
+        async with login_lock:
+            # Re-check if another concurrent request already populated CURRENT_NDUS while we waited for the lock
+            if CURRENT_NDUS:
+                is_valid = await check_cookie_valid(CURRENT_NDUS)
+                if is_valid:
+                    return CURRENT_NDUS
+            
+            new_ndus = await login_and_get_cookie(TERABOX_EMAIL, TERABOX_PASSWORD)
+            if new_ndus:
+                CURRENT_NDUS = new_ndus
+                # Update the cookie lists
+                if new_ndus not in HEALTHY_COOKIES:
+                    HEALTHY_COOKIES.append(new_ndus)
+                return new_ndus
             
     print("Warning: No active or valid ndus cookie could be found or refreshed.")
     return None
