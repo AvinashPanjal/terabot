@@ -171,7 +171,7 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
             ]):
                 await route.abort()
                 return
-            if request.resource_type in ["image", "stylesheet", "font", "media"]:
+            if request.resource_type in ["image", "font", "media"]:
                 await route.abort()
                 return
             await route.continue_()
@@ -485,7 +485,7 @@ async def extract_url(req: ExtractRequest):
                 await route.abort()
                 return
             
-            if request.resource_type in ["image", "stylesheet", "font"]:
+            if request.resource_type in ["image", "font"]:
                 await route.abort()
                 return
 
