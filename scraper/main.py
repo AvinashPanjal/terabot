@@ -144,6 +144,7 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
             context = await p.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 headless=True,
+                viewport={"width": 375, "height": 812},
                 args=[
                     "--autoplay-policy=no-user-gesture-required", 
                     "--mute-audio",
@@ -152,24 +153,35 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
                     "--disable-dev-shm-usage",
                     "--disable-web-security"
                 ],
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+                user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
             )
             page = await context.new_page()
             try:
                 await page.goto("https://www.1024tera.com/wap/outside/login", wait_until="networkidle", timeout=30000)
                 
-                # Expand options
-                arrow = await page.wait_for_selector(".icon-arrow", timeout=5000)
-                if arrow:
-                    await arrow.click()
-                    await page.wait_for_timeout(1000)
-                    
-                # Click email form envelope button
-                other_item = await page.wait_for_selector(".other-item", timeout=5000)
-                if other_item:
-                    await other_item.click()
-                    await page.wait_for_timeout(2000)
-                    
+                # Check if email input is already visible
+                email_input = await page.query_selector('input[placeholder="Enter your email"]')
+                if email_input and await email_input.is_visible():
+                    print("Email input is already visible, skipping navigation clicks.")
+                else:
+                    # Expand options if mobile arrow is present
+                    try:
+                        arrow = await page.wait_for_selector(".icon-arrow", timeout=4000)
+                        if arrow:
+                            await arrow.click()
+                            await page.wait_for_timeout(1000)
+                    except Exception:
+                        print("No expand arrow found or timed out.")
+                        
+                    # Click email form envelope button (other-item) if present
+                    try:
+                        other_item = await page.wait_for_selector(".other-item", timeout=4000)
+                        if other_item:
+                            await other_item.click()
+                            await page.wait_for_timeout(1500)
+                    except Exception:
+                        print("No other-item button found or timed out.")
+                
                 # Fill email and password
                 await page.fill('input[placeholder="Enter your email"]', email)
                 await page.fill('input[placeholder="Enter your new password."]', password)
