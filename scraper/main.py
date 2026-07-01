@@ -100,6 +100,20 @@ HEALTHY_COOKIES = list(NDUS_POOL)
 
 TERABOX_EMAIL = os.getenv("TERABOX_EMAIL")
 TERABOX_PASSWORD = os.getenv("TERABOX_PASSWORD")
+
+credentials_path = os.path.join(os.path.dirname(__file__), "credentials.json")
+if os.path.exists(credentials_path):
+    try:
+        import json
+        with open(credentials_path, "r", encoding="utf-8") as f:
+            creds = json.load(f)
+            if not TERABOX_EMAIL:
+                TERABOX_EMAIL = creds.get("TERABOX_EMAIL")
+            if not TERABOX_PASSWORD:
+                TERABOX_PASSWORD = creds.get("TERABOX_PASSWORD")
+    except Exception as e:
+        print(f"Error loading credentials.json: {e}")
+
 CURRENT_NDUS = HEALTHY_COOKIES[0] if HEALTHY_COOKIES else None
 
 async def check_cookie_valid(ndus: str) -> bool:
