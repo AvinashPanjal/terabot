@@ -134,14 +134,18 @@ async def check_cookie_valid(ndus: str) -> bool:
     return False
 
 async def login_and_get_cookie(email: str, password: str) -> str | None:
+    global browser_context, playwright_instance
     if not email or not password:
         print("Credentials not configured. Skipping automated login.")
         return None
     print(f"Attempting automated login for {email}...")
     try:
-        async with async_playwright() as p:
-            user_data_dir = os.path.join(os.path.dirname(__file__), "login_session")
-            context = await p.chromium.launch_persistent_context(
+        if not browser_context:
+            print("browser_context not ready in login, initializing now...")
+            if not playwright_instance:
+                playwright_instance = await async_playwright().start()
+            user_data_dir = os.path.join(os.path.dirname(__file__), "browser_session")
+            browser_context = await playwright_instance.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 headless=True,
                 viewport={"width": 375, "height": 812},
@@ -155,82 +159,83 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
                 ],
                 user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
             )
-            page = await context.new_page()
-            try:
-                # Navigate with retries to handle startup bandwidth saturation (e.g. static-ffmpeg download)
-                for attempt in range(2):
-                    try:
-                        print(f"Navigating to login page (attempt {attempt+1})...")
-                        await page.goto("https://www.1024tera.com/wap/outside/login", wait_until="domcontentloaded", timeout=30000)
-                        break
-                    except Exception as goto_err:
-                        if attempt == 1:
-                            raise goto_err
-                        print(f"Navigation attempt {attempt+1} failed: {goto_err}. Retrying in 4 seconds...")
-                        await page.wait_for_timeout(4000)
-                await page.wait_for_timeout(3000)
-                
-                # Check if email input is already visible
-                email_input = await page.query_selector('input[placeholder="Enter your email"]')
-                if email_input and await email_input.is_visible():
-                    print("Email input is already visible, skipping navigation clicks.")
-                else:
-                    # Expand options if mobile arrow is present
-                    try:
-                        arrow = await page.wait_for_selector(".icon-arrow", timeout=4000)
-                        if arrow:
-                            await arrow.tap()
-                            await page.wait_for_timeout(1000)
-                    except Exception:
-                        print("No expand arrow found or timed out.")
-                        
-                    # Tap email form envelope button (other-item) if present
-                    try:
-                        other_item = await page.wait_for_selector(".other-item", timeout=4000)
-                        if other_item:
-                            await other_item.tap()
-                            await page.wait_for_timeout(1500)
-                    except Exception:
-                        print("No other-item button found or timed out.")
-                
-                # Fill email and password
-                await page.fill('input[placeholder="Enter your email"]', email)
-                await page.fill('input[placeholder="Enter your new password."]', password)
-                await page.wait_for_timeout(1000)
-                
-                # Tap Login
-                login_btn = await page.wait_for_selector(".btn-class-login", timeout=5000)
-                if login_btn:
-                    await login_btn.tap()
-                    print("Automated login submitted. Waiting for session cookies...")
-                    
-                    ndus = None
-                    for _ in range(15):
-                        cookies = await context.cookies()
-                        ndus_cookie = next((c for c in cookies if c["name"] == "ndus"), None)
-                        if ndus_cookie:
-                            ndus = ndus_cookie["value"]
-                            break
-                        await page.wait_for_timeout(1000)
-                        
-                    if ndus:
-                        print("Automated login succeeded!")
-                        return ndus
-                    else:
-                        err_screenshot = os.path.join(os.path.dirname(__file__), "login_error.png")
-                        await page.screenshot(path=err_screenshot)
-                        print(f"Automated login failed to get ndus cookie. Saved page state screenshot to {err_screenshot}")
-            except Exception as page_err:
-                print(f"Error inside Playwright login context: {page_err}")
+            
+        page = await browser_context.new_page()
+        try:
+            # Navigate with retries to handle startup bandwidth saturation (e.g. static-ffmpeg download)
+            for attempt in range(2):
                 try:
+                    print(f"Navigating to login page (attempt {attempt+1})...")
+                    await page.goto("https://www.1024tera.com/wap/outside/login", wait_until="domcontentloaded", timeout=30000)
+                    break
+                except Exception as goto_err:
+                    if attempt == 1:
+                        raise goto_err
+                    print(f"Navigation attempt {attempt+1} failed: {goto_err}. Retrying in 4 seconds...")
+                    await page.wait_for_timeout(4000)
+            await page.wait_for_timeout(3000)
+            
+            # Check if email input is already visible
+            email_input = await page.query_selector('input[placeholder="Enter your email"]')
+            if email_input and await email_input.is_visible():
+                print("Email input is already visible, skipping navigation clicks.")
+            else:
+                # Expand options if mobile arrow is present
+                try:
+                    arrow = await page.wait_for_selector(".icon-arrow", timeout=4000)
+                    if arrow:
+                        await arrow.tap()
+                        await page.wait_for_timeout(1000)
+                except Exception:
+                    print("No expand arrow found or timed out.")
+                    
+                # Tap email form envelope button (other-item) if present
+                try:
+                    other_item = await page.wait_for_selector(".other-item", timeout=4000)
+                    if other_item:
+                        await other_item.tap()
+                        await page.wait_for_timeout(1500)
+                except Exception:
+                    print("No other-item button found or timed out.")
+            
+            # Fill email and password
+            await page.fill('input[placeholder="Enter your email"]', email)
+            await page.fill('input[placeholder="Enter your new password."]', password)
+            await page.wait_for_timeout(1000)
+            
+            # Tap Login
+            login_btn = await page.wait_for_selector(".btn-class-login", timeout=5000)
+            if login_btn:
+                await login_btn.tap()
+                print("Automated login submitted. Waiting for session cookies...")
+                
+                ndus = None
+                for _ in range(15):
+                    cookies = await browser_context.cookies()
+                    ndus_cookie = next((c for c in cookies if c["name"] == "ndus"), None)
+                    if ndus_cookie:
+                        ndus = ndus_cookie["value"]
+                        break
+                    await page.wait_for_timeout(1000)
+                    
+                if ndus:
+                    print("Automated login succeeded!")
+                    return ndus
+                else:
                     err_screenshot = os.path.join(os.path.dirname(__file__), "login_error.png")
                     await page.screenshot(path=err_screenshot)
-                except:
-                    pass
-            finally:
-                await context.close()
-    except Exception as launch_err:
-        print(f"Error launching Playwright for automated login: {launch_err}")
+                    print(f"Automated login failed to get ndus cookie. Saved page state screenshot to {err_screenshot}")
+        except Exception as page_err:
+            print(f"Error inside Playwright login context: {page_err}")
+            try:
+                err_screenshot = os.path.join(os.path.dirname(__file__), "login_error.png")
+                await page.screenshot(path=err_screenshot)
+            except:
+                pass
+        finally:
+            await page.close()
+    except Exception as e:
+        print(f"Error during automated login: {e}")
     return None
 
 async def ensure_active_cookie() -> str | None:
@@ -288,21 +293,16 @@ browser_context = None
 async def startup_event():
     asyncio.create_task(cleanup_loop())
     
-    # Try to verify or refresh cookie on startup
-    async def init_cookie_on_startup():
-        print("Checking/refreshing cookie on startup...")
-        await ensure_active_cookie()
-    asyncio.create_task(init_cookie_on_startup())
-    
     # Pre-launch Playwright browser context on startup to keep it warm and fast
     global playwright_instance, browser_context
     try:
-        print("Pre-launching global Playwright browser context...")
+        print("Pre-launching global Playwright browser context (mobile emulated)...")
         playwright_instance = await async_playwright().start()
         user_data_dir = os.path.join(os.path.dirname(__file__), "browser_session")
         browser_context = await playwright_instance.chromium.launch_persistent_context(
             user_data_dir=user_data_dir,
             headless=True,
+            viewport={"width": 375, "height": 812},
             args=[
                 "--autoplay-policy=no-user-gesture-required", 
                 "--mute-audio",
@@ -311,11 +311,17 @@ async def startup_event():
                 "--disable-dev-shm-usage",
                 "--disable-web-security"
             ],
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
         )
         print("Global Playwright browser context launched successfully.")
     except Exception as e:
         print(f"Failed to pre-launch global Playwright browser: {e}")
+
+    # Try to verify or refresh cookie on startup (after browser is ready!)
+    async def init_cookie_on_startup():
+        print("Checking/refreshing cookie on startup...")
+        await ensure_active_cookie()
+    asyncio.create_task(init_cookie_on_startup())
 
 @app.on_event("shutdown")
 async def shutdown_event():
