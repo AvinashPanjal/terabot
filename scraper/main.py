@@ -161,6 +161,23 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
             )
             
         page = await browser_context.new_page()
+        
+        # Route to block heavy resources and tracking scripts to save RAM and CPU
+        async def block_resources(route, request):
+            req_url = request.url.lower()
+            if any(x in req_url for x in [
+                "analytics", "googleads", "doubleclick", "facebook.net", "facebook.com", 
+                "bat.bing", "bing.com", "beacon", "telemetry"
+            ]):
+                await route.abort()
+                return
+            if request.resource_type in ["image", "stylesheet", "font", "media"]:
+                await route.abort()
+                return
+            await route.continue_()
+            
+        await page.route("**/*", block_resources)
+
         try:
             # Navigate with retries to handle startup bandwidth saturation (e.g. static-ffmpeg download)
             for attempt in range(2):
@@ -175,28 +192,33 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
                     await page.wait_for_timeout(4000)
             await page.wait_for_timeout(3000)
             
+            # Wait for any of the key elements to mount
+            try:
+                print("Waiting for login elements to mount...")
+                await page.wait_for_selector(".icon-arrow, .other-item, input[placeholder='Enter your email']", timeout=15000)
+            except Exception as wait_err:
+                print(f"Login elements failed to mount: {wait_err}")
+
             # Check if email input is already visible
             email_input = await page.query_selector('input[placeholder="Enter your email"]')
             if email_input and await email_input.is_visible():
                 print("Email input is already visible, skipping navigation clicks.")
             else:
-                # Expand options if mobile arrow is present
-                try:
-                    arrow = await page.wait_for_selector(".icon-arrow", timeout=4000)
-                    if arrow:
-                        await arrow.tap()
-                        await page.wait_for_timeout(1000)
-                except Exception:
-                    print("No expand arrow found or timed out.")
+                # Check if we need to expand options
+                arrow = await page.query_selector(".icon-arrow")
+                if arrow and await arrow.is_visible():
+                    print("Tapping expand arrow...")
+                    await arrow.tap()
+                    await page.wait_for_timeout(1000)
                     
-                # Tap email form envelope button (other-item) if present
-                try:
-                    other_item = await page.wait_for_selector(".other-item", timeout=4000)
-                    if other_item:
-                        await other_item.tap()
-                        await page.wait_for_timeout(1500)
-                except Exception:
-                    print("No other-item button found or timed out.")
+                # Tap envelope button
+                other_item = await page.query_selector(".other-item")
+                if other_item:
+                    print("Tapping envelope button...")
+                    await other_item.tap()
+                    await page.wait_for_timeout(1500)
+                else:
+                    print("Envelope button (.other-item) not found.")
             
             # Fill email and password
             await page.fill('input[placeholder="Enter your email"]', email)
@@ -455,16 +477,20 @@ async def extract_url(req: ExtractRequest):
             if any(kw in req_url.lower() for kw in ["download", "video", "stream", "pcs", "m3u8", ".mp4", "api/szfile", "sharing"]) or request.resource_type == "media":
                 print(f"[Intercepted Request] Type: {request.resource_type} | URL: {req_url}")
 
-            if "google.com" in req_url or "doubleclick.net" in req_url or "analytics" in req_url:
-                await route.continue_()
+            req_url_lower = req_url.lower()
+            if any(x in req_url_lower for x in [
+                "analytics", "googleads", "doubleclick", "facebook.net", "facebook.com", 
+                "bat.bing", "bing.com", "beacon", "telemetry"
+            ]):
+                await route.abort()
                 return
             
-            if request.resource_type in ["image", "stylesheet", "font", "script"]:
-                await route.continue_()
+            if request.resource_type in ["image", "stylesheet", "font"]:
+                await route.abort()
                 return
 
-            if ".ts" in req_url or "_ts/" in req_url:
-                await route.continue_()
+            if ".ts" in req_url_lower or "_ts/" in req_url_lower:
+                await route.abort()
                 return
 
             if "SUBTITLE" in req_url or "subtitle" in req_url or ".srt" in req_url:
