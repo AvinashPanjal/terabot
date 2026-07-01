@@ -38,8 +38,8 @@ TERABOX_REGEX = r"https?:\/\/(www\.)?(terabox\.com|terabox\.app|teraboxapp\.com|
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Welcome to TeraFetch Bot!\n\n"
-        "Send me a TeraBox link (or any of its mirror domains like terasharefile, freeterabox, etc.), and I'll extract and download the video preview/trimmed version directly into this chat for you.\n\n"
-        "⚡ **Fast & Unlimited (No Login/Cookies Required)**",
+        "Send me a TeraBox link (or any of its mirror domains like terasharefile, freeterabox, etc.), and I'll extract, download, and send the video directly into this chat for you.\n\n"
+        "⚡ **Fast & Unlimited (Full Video downloading enabled if credentials are configured)**",
         parse_mode="Markdown"
     )
 

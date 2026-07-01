@@ -98,67 +98,135 @@ if ndus_env:
 # Initialize healthy cookies list with configured cookies
 HEALTHY_COOKIES = list(NDUS_POOL)
 
-cookie_index = 0
+TERABOX_EMAIL = os.getenv("TERABOX_EMAIL")
+TERABOX_PASSWORD = os.getenv("TERABOX_PASSWORD")
+CURRENT_NDUS = HEALTHY_COOKIES[0] if HEALTHY_COOKIES else None
 
-async def get_all_cookies() -> list:
-    pool = list(HEALTHY_COOKIES)
-    # Fallback to local Playwright browser cookies if pool is empty
-    if not pool:
-        pw_cookies = await get_browser_cookies()
-        pw_ndus = pw_cookies.get("ndus")
-        if pw_ndus:
-            pool.append(pw_ndus)
-    return pool
+async def check_cookie_valid(ndus: str) -> bool:
+    if not ndus:
+        return False
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Cookie": f"ndus={ndus}",
+            "Referer": "https://www.terabox.app/"
+        }
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            res = await client.get("https://www.terabox.app/main", headers=headers)
+            if res.status_code == 200 and "login" not in str(res.url):
+                return True
+    except Exception as e:
+        print(f"Error checking cookie validity: {e}")
+    return False
 
-async def get_next_cookie() -> str:
-    global cookie_index
-    pool = await get_all_cookies()
-    if not pool:
+async def login_and_get_cookie(email: str, password: str) -> str | None:
+    if not email or not password:
+        print("Credentials not configured. Skipping automated login.")
         return None
-    cookie = pool[cookie_index % len(pool)]
-    cookie_index += 1
-    return cookie
-
-async def keep_alive_task():
-    global HEALTHY_COOKIES
-    # Wait a few seconds for server startup
-    await asyncio.sleep(5)
-    while True:
-        pool_to_verify = list(NDUS_POOL)
-        if not pool_to_verify:
-            pw_cookies = await get_browser_cookies()
-            pw_ndus = pw_cookies.get("ndus")
-            if pw_ndus:
-                pool_to_verify = [pw_ndus]
-
-        if not pool_to_verify:
-            print("Keep-alive check: No cookies configured in the pool.")
-            HEALTHY_COOKIES = []
-        else:
-            print(f"Keep-alive check: Verifying {len(pool_to_verify)} cookies in the pool...")
-            active_cookies = []
-            for i, ndus in enumerate(pool_to_verify):
+    print(f"Attempting automated login for {email}...")
+    try:
+        async with async_playwright() as p:
+            user_data_dir = os.path.join(os.path.dirname(__file__), "browser_session")
+            context = await p.chromium.launch_persistent_context(
+                user_data_dir=user_data_dir,
+                headless=True,
+                args=[
+                    "--autoplay-policy=no-user-gesture-required", 
+                    "--mute-audio",
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-web-security"
+                ],
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+            )
+            page = await context.new_page()
+            try:
+                await page.goto("https://www.1024tera.com/wap/outside/login", wait_until="networkidle", timeout=30000)
+                
+                # Expand options
+                arrow = await page.wait_for_selector(".icon-arrow", timeout=5000)
+                if arrow:
+                    await arrow.click()
+                    await page.wait_for_timeout(1000)
+                    
+                # Click email form envelope button
+                other_item = await page.wait_for_selector(".other-item", timeout=5000)
+                if other_item:
+                    await other_item.click()
+                    await page.wait_for_timeout(2000)
+                    
+                # Fill email and password
+                await page.fill('input[placeholder="Enter your email"]', email)
+                await page.fill('input[placeholder="Enter your new password."]', password)
+                await page.wait_for_timeout(1000)
+                
+                # Click Login
+                login_btn = await page.wait_for_selector(".btn-class-login", timeout=5000)
+                if login_btn:
+                    await login_btn.click()
+                    print("Automated login submitted. Waiting for session cookies...")
+                    
+                    ndus = None
+                    for _ in range(15):
+                        cookies = await context.cookies()
+                        ndus_cookie = next((c for c in cookies if c["name"] == "ndus"), None)
+                        if ndus_cookie:
+                            ndus = ndus_cookie["value"]
+                            break
+                        await page.wait_for_timeout(1000)
+                        
+                    if ndus:
+                        print("Automated login succeeded!")
+                        return ndus
+                    else:
+                        err_screenshot = os.path.join(os.path.dirname(__file__), "login_error.png")
+                        await page.screenshot(path=err_screenshot)
+                        print(f"Automated login failed to get ndus cookie. Saved page state screenshot to {err_screenshot}")
+            except Exception as page_err:
+                print(f"Error inside Playwright login context: {page_err}")
                 try:
-                    headers = {
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                        "Cookie": f"ndus={ndus}",
-                        "Referer": "https://www.terabox.app/"
-                    }
-                    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-                        # Request the main page to keep the session active
-                        res = await client.get("https://www.terabox.app/main", headers=headers)
-                        if res.status_code == 200 and "login" not in str(res.url):
-                            print(f"Cookie #{i+1} ({ndus[:8]}...): Active & Healthy")
-                            active_cookies.append(ndus)
-                        else:
-                            print(f"Cookie #{i+1} ({ndus[:8]}...): Expired or Invalid! (Status: {res.status_code}, URL: {res.url})")
-                except Exception as e:
-                    print(f"Cookie #{i+1} ({ndus[:8]}...): Error during keep-alive: {e}")
-                    # Keep it in pool on network errors to be safe
-                    active_cookies.append(ndus)
-            HEALTHY_COOKIES = active_cookies
-        # Sleep for 10 minutes
-        await asyncio.sleep(600)
+                    err_screenshot = os.path.join(os.path.dirname(__file__), "login_error.png")
+                    await page.screenshot(path=err_screenshot)
+                except:
+                    pass
+            finally:
+                await context.close()
+    except Exception as launch_err:
+        print(f"Error launching Playwright for automated login: {launch_err}")
+    return None
+
+async def ensure_active_cookie() -> str | None:
+    global CURRENT_NDUS, HEALTHY_COOKIES
+    
+    # 1. Check if the existing cached cookie is valid
+    if CURRENT_NDUS:
+        is_valid = await check_cookie_valid(CURRENT_NDUS)
+        if is_valid:
+            return CURRENT_NDUS
+        else:
+            print("Current cached ndus cookie has expired/invalidated.")
+            CURRENT_NDUS = None
+            
+    # 2. Check if pool contains a valid cookie
+    for ndus in list(HEALTHY_COOKIES):
+        is_valid = await check_cookie_valid(ndus)
+        if is_valid:
+            CURRENT_NDUS = ndus
+            return CURRENT_NDUS
+            
+    # 3. Trigger automated login if credentials are set
+    if TERABOX_EMAIL and TERABOX_PASSWORD:
+        new_ndus = await login_and_get_cookie(TERABOX_EMAIL, TERABOX_PASSWORD)
+        if new_ndus:
+            CURRENT_NDUS = new_ndus
+            # Update the cookie lists
+            if new_ndus not in HEALTHY_COOKIES:
+                HEALTHY_COOKIES.append(new_ndus)
+            return new_ndus
+            
+    print("Warning: No active or valid ndus cookie could be found or refreshed.")
+    return None
 
 async def cleanup_loop():
     while True:
@@ -181,9 +249,13 @@ browser_context = None
 
 @app.on_event("startup")
 async def startup_event():
-    # Cookie verification is disabled since we run in guest/cookie-free mode
-    # asyncio.create_task(keep_alive_task())
     asyncio.create_task(cleanup_loop())
+    
+    # Try to verify or refresh cookie on startup
+    async def init_cookie_on_startup():
+        print("Checking/refreshing cookie on startup...")
+        await ensure_active_cookie()
+    asyncio.create_task(init_cookie_on_startup())
     
     # Pre-launch Playwright browser context on startup to keep it warm and fast
     global playwright_instance, browser_context
@@ -266,9 +338,15 @@ async def extract_url(req: ExtractRequest):
         raise HTTPException(status_code=400, detail="URL is required")
 
     print(f"Extraction request for link: {url}")
-    print("Running cookie-free Playwright guest-mode automation...")
+    
+    # Check and refresh/ensure active cookie
+    ndus = await ensure_active_cookie()
+    if ndus:
+        print(f"Using active ndus cookie ({ndus[:8]}...) for extraction.")
+    else:
+        print("Proceeding without active cookie (may fall back to 20-second preview).")
 
-    # Playwright Guest-Mode Automation
+    # Playwright Guest-Mode or Logged-In Automation
     direct_url = None
     filename = "video.mp4"
     cookie_string = ""
@@ -298,6 +376,31 @@ async def extract_url(req: ExtractRequest):
                 ],
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
             )
+
+        # Inject ndus cookie into context if available
+        if ndus:
+            domains = [
+                ".terabox.app", 
+                ".teraboxapp.com", 
+                ".1024tera.com", 
+                ".terafileshare.com", 
+                ".nephobox.com",
+                ".4funbox.com",
+                ".mirrobox.com",
+                ".momerybox.com",
+                ".teraboxlink.com",
+                ".terasharelink.com",
+                ".terasharefile.com",
+                ".terashare.link",
+                ".freeterabox.com"
+            ]
+            await browser_context.add_cookies([{
+                "name": "ndus",
+                "value": ndus,
+                "domain": d,
+                "path": "/"
+            } for d in domains])
+            print("Injected active ndus cookie into Playwright context.")
 
         page = await browser_context.new_page()
         
