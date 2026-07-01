@@ -140,7 +140,7 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
     print(f"Attempting automated login for {email}...")
     try:
         async with async_playwright() as p:
-            user_data_dir = os.path.join(os.path.dirname(__file__), "browser_session")
+            user_data_dir = os.path.join(os.path.dirname(__file__), "login_session")
             context = await p.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 headless=True,
