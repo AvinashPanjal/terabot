@@ -498,13 +498,16 @@ async def extract_url(req: ExtractRequest):
                 await route.abort()
                 return
 
+            if any(x in req_url_lower for x in ["sharing/link", "wap/share", "wap/outside", "wap/login"]):
+                await route.continue_()
+                return
+
             if "SUBTITLE" in req_url or "subtitle" in req_url or ".srt" in req_url:
                 await route.continue_()
                 return
 
-            req_url_lower = req_url.lower()
             if "api/download" in req_url_lower or "type=d" in req_url_lower or ".m3u8" in req_url_lower or "type=m3u8" in req_url_lower or "sharing" in req_url_lower or "pcs.baidu.com" in req_url_lower:
-                if any(domain in req_url_lower for domain in ["terabox", "baidupcs", "freeterabox", "baidu.com", "pcs", "teraboxcdn"]):
+                if any(domain in req_url_lower for domain in ["terabox", "baidupcs", "freeterabox", "baidu.com", "pcs.", "teraboxcdn"]):
                     if "thumbnail" not in req_url_lower and "favicon" not in req_url_lower:
                         if not direct_url:
                             direct_url = req_url
