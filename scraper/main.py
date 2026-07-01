@@ -157,7 +157,17 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
             )
             page = await context.new_page()
             try:
-                await page.goto("https://www.1024tera.com/wap/outside/login", wait_until="domcontentloaded", timeout=20000)
+                # Navigate with retries to handle startup bandwidth saturation (e.g. static-ffmpeg download)
+                for attempt in range(2):
+                    try:
+                        print(f"Navigating to login page (attempt {attempt+1})...")
+                        await page.goto("https://www.1024tera.com/wap/outside/login", wait_until="domcontentloaded", timeout=30000)
+                        break
+                    except Exception as goto_err:
+                        if attempt == 1:
+                            raise goto_err
+                        print(f"Navigation attempt {attempt+1} failed: {goto_err}. Retrying in 4 seconds...")
+                        await page.wait_for_timeout(4000)
                 await page.wait_for_timeout(3000)
                 
                 # Check if email input is already visible
