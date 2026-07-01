@@ -197,11 +197,15 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
                     await arrow.tap()
                     await page.wait_for_timeout(1000)
                     
-                # Tap envelope button
-                other_item = await page.query_selector(".other-item")
-                if other_item:
-                    print("Tapping envelope button...")
-                    await other_item.tap()
+                # Tap envelope button (the second .other-item represents the Mail login form)
+                other_items = await page.query_selector_all(".other-item")
+                if len(other_items) >= 2:
+                    print("Tapping the second envelope button (Mail)...")
+                    await other_items[1].tap()
+                    await page.wait_for_timeout(1500)
+                elif len(other_items) == 1:
+                    print("Tapping the only envelope button...")
+                    await other_items[0].tap()
                     await page.wait_for_timeout(1500)
                 else:
                     print("Envelope button (.other-item) not found.")
