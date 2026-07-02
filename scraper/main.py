@@ -129,17 +129,8 @@ async def get_browser_cookies() -> dict:
         global browser_context
         if browser_context:
             cookies = await browser_context.cookies()
-        else:
-            async with async_playwright() as p:
-                user_data_dir = os.path.join(os.path.dirname(__file__), "browser_session")
-                context = await p.chromium.launch_persistent_context(
-                    user_data_dir=user_data_dir,
-                    headless=True,
-                    args=["--autoplay-policy=no-user-gesture-required", "--mute-audio"]
-                )
-                cookies = await context.cookies()
-                await context.close()
-        return {c['name']: c['value'] for c in cookies}
+            return {c['name']: c['value'] for c in cookies}
+        return {}
     except Exception as e:
         print(f"Error fetching cookies from Playwright: {safe_str(e)}")
         return {}
@@ -867,7 +858,7 @@ async def debug_info():
         return {"error": str(e)}
 
 @app.get("/api/cookie")
-async def get_active_cookie(token: str = None):
+async def get_active_cookie(token: str = None, refresh: bool = False):
     def clean(t: str | None) -> str:
         if not t:
             return ""
@@ -888,7 +879,17 @@ async def get_active_cookie(token: str = None):
     if not authorized:
         raise HTTPException(status_code=401, detail="Unauthorized")
     
-    ndus = await ensure_active_cookie()
+    if refresh:
+        ndus = await ensure_active_cookie()
+    else:
+        # Fast path: check current memory, check store, check browser cookies
+        ndus = CURRENT_NDUS
+        if not ndus:
+            ndus = load_stored_ndus()
+        if not ndus:
+            browser_cookies = await get_browser_cookies()
+            ndus = normalize_ndus(browser_cookies.get("ndus"))
+            
     if ndus:
         return {
             "success": True,
@@ -896,7 +897,7 @@ async def get_active_cookie(token: str = None):
         }
     return {
         "success": False,
-        "error": "No active ndus cookie could be found or refreshed."
+        "error": "No active ndus cookie could be found."
     }
 
 @app.get("/api/run_diag")
