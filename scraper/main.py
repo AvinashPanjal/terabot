@@ -857,7 +857,15 @@ async def debug_info():
 
 @app.get("/api/cookie")
 async def get_active_cookie(token: str = None):
-    if not TELEGRAM_BOT_TOKEN or token != TELEGRAM_BOT_TOKEN:
+    def clean(t: str | None) -> str:
+        if not t:
+            return ""
+        return t.strip().strip('"').strip("'")
+    
+    cleaned_bot_token = clean(TELEGRAM_BOT_TOKEN)
+    cleaned_input_token = clean(token)
+    
+    if not cleaned_bot_token or cleaned_input_token != cleaned_bot_token:
         raise HTTPException(status_code=401, detail="Unauthorized")
     
     ndus = await ensure_active_cookie()
