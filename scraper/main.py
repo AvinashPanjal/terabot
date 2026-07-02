@@ -854,6 +854,22 @@ async def debug_info():
     except Exception as e:
         return {"error": str(e)}
 
+@app.get("/api/cookie")
+async def get_active_cookie(token: str = None):
+    if not TELEGRAM_BOT_TOKEN or token != TELEGRAM_BOT_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    ndus = await ensure_active_cookie()
+    if ndus:
+        return {
+            "success": True,
+            "ndus": ndus
+        }
+    return {
+        "success": False,
+        "error": "No active ndus cookie could be found or refreshed."
+    }
+
 @app.get("/api/run_diag")
 async def run_diag():
     import os
