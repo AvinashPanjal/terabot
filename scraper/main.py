@@ -844,13 +844,24 @@ async def debug_info():
         tmp_files = os.listdir('/tmp') if os.path.exists('/tmp') else []
         env_keys = list(os.environ.keys())
         clean_env = {k: ("SET" if os.environ[k] else "EMPTY") for k in env_keys if "TOKEN" in k or "KEY" in k or "COOKIE" in k or "SECRET" in k}
+        
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN") or ""
+        token_len = len(bot_token)
+        token_prefix = bot_token[:10]
+        token_suffix = bot_token[-5:] if token_len > 5 else ""
+        
         return {
             "cwd": cwd,
             "cwd_files": cwd_files,
             "tmp_files": tmp_files,
             "python_version": sys.version,
             "environment_keys": env_keys,
-            "masked_env": clean_env
+            "masked_env": clean_env,
+            "token_info": {
+                "length": token_len,
+                "prefix": token_prefix,
+                "suffix": token_suffix
+            }
         }
     except Exception as e:
         return {"error": str(e)}
