@@ -16,7 +16,14 @@ socket.getaddrinfo = patched_getaddrinfo
 
 
 # Set Playwright browsers path inside the project root for Render compatibility
-os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pw-browsers")
+if sys.platform != 'win32' or os.getenv("RENDER"):
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pw-browsers")
+
+def safe_str(e) -> str:
+    try:
+        return str(e).encode('ascii', errors='replace').decode('ascii')
+    except:
+        return repr(e)
 
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -86,7 +93,7 @@ async def get_browser_cookies() -> dict:
             await context.close()
         return {c['name']: c['value'] for c in cookies}
     except Exception as e:
-        print(f"Error fetching cookies from Playwright: {e}")
+        print(f"Error fetching cookies from Playwright: {safe_str(e)}")
         return {}
 
 # Parse comma-separated list of cookies
@@ -112,7 +119,7 @@ if os.path.exists(credentials_path):
             if not TERABOX_PASSWORD:
                 TERABOX_PASSWORD = creds.get("TERABOX_PASSWORD")
     except Exception as e:
-        print(f"Error loading credentials.json: {e}")
+        print(f"Error loading credentials.json: {safe_str(e)}")
 
 CURRENT_NDUS = HEALTHY_COOKIES[0] if HEALTHY_COOKIES else None
 
@@ -130,7 +137,7 @@ async def check_cookie_valid(ndus: str) -> bool:
             if res.status_code == 200 and "login" not in str(res.url):
                 return True
     except Exception as e:
-        print(f"Error checking cookie validity: {e}")
+        print(f"Error checking cookie validity: {safe_str(e)}")
     return False
 
 async def login_and_get_cookie(email: str, password: str) -> str | None:
@@ -148,7 +155,7 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
             browser_context = await playwright_instance.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 headless=True,
-                viewport={"width": 375, "height": 812},
+                viewport={"width": 1280, "height": 800},
                 args=[
                     "--autoplay-policy=no-user-gesture-required", 
                     "--mute-audio",
@@ -157,7 +164,7 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
                     "--disable-dev-shm-usage",
                     "--disable-web-security"
                 ],
-                user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
             )
             
         page = await browser_context.new_page()
@@ -174,7 +181,7 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
                 except Exception as goto_err:
                     if attempt == 1:
                         raise goto_err
-                    print(f"Navigation attempt {attempt+1} failed: {goto_err}. Retrying in 4 seconds...")
+                    print(f"Navigation attempt {attempt+1} failed: {safe_str(goto_err)}. Retrying in 4 seconds...")
                     await page.wait_for_timeout(4000)
             await page.wait_for_timeout(3000)
             
@@ -183,19 +190,29 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
                 print("Waiting for login elements to mount...")
                 await page.wait_for_selector(".icon-arrow, .other-item, input[placeholder='Enter your email']", timeout=15000)
             except Exception as wait_err:
-                print(f"Login elements failed to mount: {wait_err}")
+                print(f"Login elements failed to mount: {safe_str(wait_err)}")
 
             # Check if email input is already visible
             email_input = await page.query_selector('input[placeholder="Enter your email"]')
             if email_input and await email_input.is_visible():
                 print("Email input is already visible, skipping navigation clicks.")
             else:
+                # Save step1: loaded page
+                try:
+                    await page.screenshot(path=os.path.join(os.path.dirname(__file__), "login_step1_loaded.png"))
+                except:
+                    pass
+
                 # Check if we need to expand options
                 arrow = await page.query_selector(".icon-arrow")
                 if arrow and await arrow.is_visible():
                     print("Tapping expand arrow...")
                     await arrow.tap()
                     await page.wait_for_timeout(1000)
+                    try:
+                        await page.screenshot(path=os.path.join(os.path.dirname(__file__), "login_step2_expanded.png"))
+                    except:
+                        pass
                     
                 # Wait for both envelope buttons to mount/render to avoid race conditions
                 other_items = []
@@ -204,27 +221,73 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
                     if len(other_items) >= 2:
                         break
                     await page.wait_for_timeout(500)
-                    
+                
+                # Robust envelope button tapping with retries and click/tap combinations
+                mail_tapped_successfully = False
                 if len(other_items) >= 2:
                     print("Tapping the second envelope button (Mail)...")
-                    await other_items[1].tap()
-                    await page.wait_for_timeout(1500)
+                    for attempt in range(3):
+                        try:
+                            await other_items[1].click(timeout=1000)
+                        except Exception:
+                            pass
+                        try:
+                            await other_items[1].tap(timeout=1000)
+                        except Exception:
+                            pass
+                        await page.wait_for_timeout(1500)
+                        # Check if email input is visible now
+                        email_input = await page.query_selector('input[placeholder="Enter your email"]')
+                        if email_input and await email_input.is_visible():
+                            mail_tapped_successfully = True
+                            print("Email input is now visible!")
+                            break
+                        print(f"Email input not visible yet (attempt {attempt+1}), retrying tap/click on Mail button...")
                 elif len(other_items) == 1:
                     print("Tapping the only envelope button...")
-                    await other_items[0].tap()
-                    await page.wait_for_timeout(1500)
+                    for attempt in range(3):
+                        try:
+                            await other_items[0].click(timeout=1000)
+                        except Exception:
+                            pass
+                        try:
+                            await other_items[0].tap(timeout=1000)
+                        except Exception:
+                            pass
+                        await page.wait_for_timeout(1500)
+                        # Check if email input is visible now
+                        email_input = await page.query_selector('input[placeholder="Enter your email"]')
+                        if email_input and await email_input.is_visible():
+                            mail_tapped_successfully = True
+                            print("Email input is now visible!")
+                            break
+                        print(f"Email input not visible yet (attempt {attempt+1}), retrying tap/click on Mail button...")
                 else:
                     print("Envelope button (.other-item) not found.")
-            
+
+                try:
+                    await page.screenshot(path=os.path.join(os.path.dirname(__file__), "login_step3_mail_clicked.png"))
+                except:
+                    pass
+
             # Fill email and password
             await page.fill('input[placeholder="Enter your email"]', email)
             await page.fill('input[placeholder="Enter your new password."]', password)
             await page.wait_for_timeout(1000)
+            try:
+                await page.screenshot(path=os.path.join(os.path.dirname(__file__), "login_step4_inputs_filled.png"))
+            except:
+                pass
             
             # Tap Login
             login_btn = await page.wait_for_selector(".btn-class-login", timeout=5000)
             if login_btn:
                 await login_btn.tap()
+                await page.wait_for_timeout(2000)
+                try:
+                    await page.screenshot(path=os.path.join(os.path.dirname(__file__), "login_step5_submitted.png"))
+                except:
+                    pass
                 print("Automated login submitted. Waiting for session cookies...")
                 
                 ndus = None
@@ -244,7 +307,7 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
                     await page.screenshot(path=err_screenshot)
                     print(f"Automated login failed to get ndus cookie. Saved page state screenshot to {err_screenshot}")
         except Exception as page_err:
-            print(f"Error inside Playwright login context: {page_err}")
+            print(f"Error inside Playwright login context: {safe_str(page_err)}")
             try:
                 err_screenshot = os.path.join(os.path.dirname(__file__), "login_error.png")
                 await page.screenshot(path=err_screenshot)
@@ -253,7 +316,7 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
         finally:
             await page.close()
     except Exception as e:
-        print(f"Error during automated login: {e}")
+        print(f"Error during automated login: {safe_str(e)}")
     return None
 
 login_lock = asyncio.Lock()
@@ -329,7 +392,7 @@ async def startup_event():
         browser_context = await playwright_instance.chromium.launch_persistent_context(
             user_data_dir=user_data_dir,
             headless=True,
-            viewport={"width": 375, "height": 812},
+            viewport={"width": 1280, "height": 800},
             args=[
                 "--autoplay-policy=no-user-gesture-required", 
                 "--mute-audio",
@@ -338,7 +401,7 @@ async def startup_event():
                 "--disable-dev-shm-usage",
                 "--disable-web-security"
             ],
-            user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
         )
         print("Global Playwright browser context launched successfully.")
     except Exception as e:
@@ -506,8 +569,16 @@ async def extract_url(req: ExtractRequest):
                 await route.continue_()
                 return
 
-            if "api/download" in req_url_lower or "type=d" in req_url_lower or ".m3u8" in req_url_lower or "type=m3u8" in req_url_lower or "sharing" in req_url_lower or "pcs.baidu.com" in req_url_lower:
-                if any(domain in req_url_lower for domain in ["terabox", "baidupcs", "freeterabox", "baidu.com", "pcs.", "teraboxcdn"]):
+            # Keywords indicating direct streaming or download URLs
+            # Keywords indicating direct streaming or download URLs
+            keywords = ["api/download", "type=d", ".m3u8", "type=m3u8", "sharing", "pcs.baidu.com", "share/streaming"]
+            # Valid domains for extraction
+            valid_domains = ["terabox", "baidupcs", "freeterabox", "baidu.com", "pcs.", "teraboxcdn", "1024tera", "terashare", "nephobox", "4funbox", "mirrobox", "momerybox"]
+            
+            if any(kw in req_url_lower for kw in keywords):
+                parsed_host = urlparse(req_url).hostname or ""
+                parsed_host_lower = parsed_host.lower()
+                if any(dom in parsed_host_lower for dom in valid_domains):
                     if "thumbnail" not in req_url_lower and "favicon" not in req_url_lower:
                         if not direct_url:
                             direct_url = req_url
@@ -598,10 +669,13 @@ async def extract_url(req: ExtractRequest):
                         break
                     # Re-check src attribute if it changed dynamically
                     video_src = await page.evaluate("() => { const v = document.querySelector('video'); return v ? v.src : null; }")
-                    if video_src and video_src.startswith("http") and not video_src.startswith("blob"):
-                        print(f"Captured direct URL dynamically from video src: {video_src}")
-                        direct_url = video_src
-                        break
+                    if video_src and not video_src.startswith("blob"):
+                        if video_src.startswith("/"):
+                            video_src = "https://www.1024tera.com" + video_src
+                        if video_src.startswith("http"):
+                            print(f"Captured direct URL dynamically from video src: {video_src}")
+                            direct_url = video_src
+                            break
                     await page.wait_for_timeout(1000)
             except Exception as e:
                 print(f"Video element error or timeout: {e}")
@@ -630,14 +704,22 @@ async def extract_url(req: ExtractRequest):
         if direct_url and direct_url.startswith("/"):
             direct_url = "https://www.1024tera.com" + direct_url
             
+        if not direct_url:
+            try:
+                err_screenshot = os.path.join(os.path.dirname(__file__), "extract_error.png")
+                await page.screenshot(path=err_screenshot)
+                print(f"Extraction failed. Saved screenshot to {err_screenshot}")
+            except Exception as e_screenshot:
+                print(f"Failed to capture extraction error screenshot: {e_screenshot}")
+
         cookies = await browser_context.cookies()
         cookie_string = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
 
         await page.close()
             
     except Exception as e:
-        print(f"Playwright error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"Playwright error: {safe_str(e)}")
+        raise HTTPException(status_code=500, detail=safe_str(e))
     finally:
         playwright_semaphore.release()
 
@@ -709,7 +791,7 @@ async def run_diag():
             context = await p.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 headless=True,
-                viewport={"width": 375, "height": 812},
+                viewport={"width": 1280, "height": 800},
                 args=[
                     "--autoplay-policy=no-user-gesture-required", 
                     "--mute-audio",
@@ -718,7 +800,7 @@ async def run_diag():
                     "--disable-dev-shm-usage",
                     "--disable-web-security"
                 ],
-                user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
             )
             page = await context.new_page()
             try:
