@@ -874,11 +874,18 @@ async def get_active_cookie(token: str = None):
         return t.strip().strip('"').strip("'")
     
     cleaned_bot_token = clean(TELEGRAM_BOT_TOKEN)
+    cleaned_passwd = clean(TERABOX_PASSWORD)
     cleaned_input_token = clean(token)
     
-    print(f"Token Compare: Input={cleaned_input_token[:5]}...{cleaned_input_token[-5:] if len(cleaned_input_token) > 5 else ''} (len={len(cleaned_input_token)}) | Bot={cleaned_bot_token[:5]}...{cleaned_bot_token[-5:] if len(cleaned_bot_token) > 5 else ''} (len={len(cleaned_bot_token)})")
+    print(f"Token Compare: Input={cleaned_input_token[:5]}...{cleaned_input_token[-5:] if len(cleaned_input_token) > 5 else ''} (len={len(cleaned_input_token)}) | Bot={cleaned_bot_token[:5]}...{cleaned_bot_token[-5:] if len(cleaned_bot_token) > 5 else ''} (len={len(cleaned_bot_token)}) | Pass={cleaned_passwd[:5]}...{cleaned_passwd[-5:] if len(cleaned_passwd) > 5 else ''} (len={len(cleaned_passwd)})")
     
-    if not cleaned_bot_token or cleaned_input_token != cleaned_bot_token:
+    authorized = False
+    if cleaned_bot_token and cleaned_input_token == cleaned_bot_token:
+        authorized = True
+    if cleaned_passwd and cleaned_input_token == cleaned_passwd:
+        authorized = True
+        
+    if not authorized:
         raise HTTPException(status_code=401, detail="Unauthorized")
     
     ndus = await ensure_active_cookie()
