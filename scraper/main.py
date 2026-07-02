@@ -155,6 +155,7 @@ HEALTHY_COOKIES = list(NDUS_POOL)
 
 TERABOX_EMAIL = os.getenv("TERABOX_EMAIL")
 TERABOX_PASSWORD = os.getenv("TERABOX_PASSWORD")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 credentials_path = os.path.join(os.path.dirname(__file__), "credentials.json")
 if os.path.exists(credentials_path):
