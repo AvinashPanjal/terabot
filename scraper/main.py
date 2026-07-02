@@ -57,6 +57,50 @@ class ExtractRequest(BaseModel):
     url: str
     ndus: str | None = None
 
+COOKIE_DOMAINS = [
+    ".terabox.app",
+    ".terabox.com",
+    ".teraboxapp.com",
+    ".1024tera.com",
+    ".1024terabox.com",
+    ".terafileshare.com",
+    ".nephobox.com",
+    ".4funbox.com",
+    ".mirrobox.com",
+    ".momerybox.com",
+    ".teraboxlink.com",
+    ".terasharelink.com",
+    ".terasharefile.com",
+    ".terashare.link",
+    ".freeterabox.com",
+]
+
+COOKIE_STORE_PATH = os.getenv(
+    "TERABOX_COOKIE_STORE",
+    os.path.join(os.path.dirname(__file__), "cookie_store.json")
+)
+
+def normalize_ndus(ndus: str | None) -> str | None:
+    if not ndus:
+        return None
+    value = ndus.strip().strip('"').strip("'")
+    match = re.search(r"(?:^|;\s*)ndus=([^;]+)", value)
+    if match:
+        value = match.group(1).strip()
+    return value or None
+
+def load_stored_ndus() -> str | None:
+    try:
+        if not os.path.exists(COOKIE_STORE_PATH):
+            return None
+        import json
+        with open(COOKIE_STORE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return normalize_ndus(data.get("ndus"))
+    except Exception as e:
+        print(f"Error loading stored ndus cookie: {safe_str(e)}")
+        return None
+
 def extract_surl(url: str) -> str:
     parsed_url = urlparse(url)
     surl = None
@@ -82,15 +126,19 @@ def extract_surl(url: str) -> str:
 
 async def get_browser_cookies() -> dict:
     try:
-        async with async_playwright() as p:
-            user_data_dir = os.path.join(os.path.dirname(__file__), "browser_session")
-            context = await p.chromium.launch_persistent_context(
-                user_data_dir=user_data_dir,
-                headless=True,
-                args=["--autoplay-policy=no-user-gesture-required", "--mute-audio"]
-            )
-            cookies = await context.cookies()
-            await context.close()
+        global browser_context
+        if browser_context:
+            cookies = await browser_context.cookies()
+        else:
+            async with async_playwright() as p:
+                user_data_dir = os.path.join(os.path.dirname(__file__), "browser_session")
+                context = await p.chromium.launch_persistent_context(
+                    user_data_dir=user_data_dir,
+                    headless=True,
+                    args=["--autoplay-policy=no-user-gesture-required", "--mute-audio"]
+                )
+                cookies = await context.cookies()
+                await context.close()
         return {c['name']: c['value'] for c in cookies}
     except Exception as e:
         print(f"Error fetching cookies from Playwright: {safe_str(e)}")
@@ -100,7 +148,7 @@ async def get_browser_cookies() -> dict:
 NDUS_POOL = []
 ndus_env = os.getenv("TERABOX_NDUS")
 if ndus_env:
-    NDUS_POOL = [c.strip() for c in ndus_env.split(",") if c.strip()]
+    NDUS_POOL = [c for c in (normalize_ndus(v) for v in ndus_env.split(",")) if c]
 
 # Initialize healthy cookies list with configured cookies
 HEALTHY_COOKIES = list(NDUS_POOL)
@@ -124,6 +172,7 @@ if os.path.exists(credentials_path):
 CURRENT_NDUS = HEALTHY_COOKIES[0] if HEALTHY_COOKIES else None
 
 async def check_cookie_valid(ndus: str) -> bool:
+    ndus = normalize_ndus(ndus)
     if not ndus:
         return False
     try:
@@ -133,9 +182,11 @@ async def check_cookie_valid(ndus: str) -> bool:
             "Referer": "https://www.terabox.app/"
         }
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-            res = await client.get("https://www.terabox.app/main", headers=headers)
-            if res.status_code == 200 and "login" not in str(res.url):
-                return True
+            for check_url in ("https://www.terabox.app/main", "https://www.1024tera.com/main"):
+                res = await client.get(check_url, headers=headers)
+                final_url = str(res.url).lower()
+                if res.status_code == 200 and "login" not in final_url and "passport" not in final_url:
+                    return True
     except Exception as e:
         print(f"Error checking cookie validity: {safe_str(e)}")
     return False
@@ -303,8 +354,24 @@ async def login_and_get_cookie(email: str, password: str) -> str | None:
                     print("Automated login succeeded!")
                     return ndus
                 else:
+                    needs_verification = await page.evaluate("""() => {
+                        const text = document.body ? document.body.innerText.toLowerCase() : "";
+                        const inputs = Array.from(document.querySelectorAll("input"));
+                        return text.includes("verification code") || inputs.some(input => {
+                            const placeholder = (input.getAttribute("placeholder") || "").toLowerCase();
+                            return placeholder.includes("verification") || placeholder.includes("code");
+                        });
+                    }""")
                     err_screenshot = os.path.join(os.path.dirname(__file__), "login_error.png")
                     await page.screenshot(path=err_screenshot)
+                    if needs_verification:
+                        print(
+                            "Automated login reached a verification-code challenge. "
+                            "Credentials alone cannot refresh ndus; run scraper/login.py once and complete login manually, "
+                            "or set TERABOX_NDUS."
+                        )
+                    else:
+                        print("Automated login submitted but no ndus cookie was created.")
                     print(f"Automated login failed to get ndus cookie. Saved page state screenshot to {err_screenshot}")
         except Exception as page_err:
             print(f"Error inside Playwright login context: {safe_str(page_err)}")
@@ -339,8 +406,27 @@ async def ensure_active_cookie() -> str | None:
         if is_valid:
             CURRENT_NDUS = ndus
             return CURRENT_NDUS
+
+    # 3. Check the shared cookie store. The Telegram admin command updates this file.
+    stored_ndus = load_stored_ndus()
+    if stored_ndus and await check_cookie_valid(stored_ndus):
+        print("Using ndus cookie from shared cookie store.")
+        CURRENT_NDUS = stored_ndus
+        if stored_ndus not in HEALTHY_COOKIES:
+            HEALTHY_COOKIES.append(stored_ndus)
+        return CURRENT_NDUS
+
+    # 4. Reuse a manually logged-in persistent browser session if it has a valid ndus cookie.
+    browser_cookies = await get_browser_cookies()
+    browser_ndus = normalize_ndus(browser_cookies.get("ndus"))
+    if browser_ndus and await check_cookie_valid(browser_ndus):
+        print("Using ndus cookie from existing Playwright browser_session.")
+        CURRENT_NDUS = browser_ndus
+        if browser_ndus not in HEALTHY_COOKIES:
+            HEALTHY_COOKIES.append(browser_ndus)
+        return CURRENT_NDUS
             
-    # 3. Trigger automated login if credentials are set (guarded by lock)
+    # 5. Trigger automated login if credentials are set (guarded by lock)
     if TERABOX_EMAIL and TERABOX_PASSWORD:
         async with login_lock:
             # Re-check if another concurrent request already populated CURRENT_NDUS while we waited for the lock
@@ -472,8 +558,12 @@ async def extract_url(req: ExtractRequest):
 
     print(f"Extraction request for link: {url}")
     
-    # Check and refresh/ensure active cookie
-    ndus = await ensure_active_cookie()
+    # Check request-supplied cookie first, then refresh/ensure active cookie.
+    ndus = normalize_ndus(req.ndus)
+    if ndus and await check_cookie_valid(ndus):
+        print("Using ndus cookie supplied in extraction request.")
+    else:
+        ndus = await ensure_active_cookie()
     if ndus:
         print(f"Using active ndus cookie ({ndus[:8]}...) for extraction.")
     else:
@@ -512,27 +602,12 @@ async def extract_url(req: ExtractRequest):
 
         # Inject ndus cookie into context if available
         if ndus:
-            domains = [
-                ".terabox.app", 
-                ".teraboxapp.com", 
-                ".1024tera.com", 
-                ".terafileshare.com", 
-                ".nephobox.com",
-                ".4funbox.com",
-                ".mirrobox.com",
-                ".momerybox.com",
-                ".teraboxlink.com",
-                ".terasharelink.com",
-                ".terasharefile.com",
-                ".terashare.link",
-                ".freeterabox.com"
-            ]
             await browser_context.add_cookies([{
                 "name": "ndus",
                 "value": ndus,
                 "domain": d,
                 "path": "/"
-            } for d in domains])
+            } for d in COOKIE_DOMAINS])
             print("Injected active ndus cookie into Playwright context.")
 
         page = await browser_context.new_page()

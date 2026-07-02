@@ -43,10 +43,11 @@ next-env.d.ts
 # Scraper / Bot specific
 /scraper/browser_session/
 /scraper/users.db
+/scraper/cookie_store.json
+/scraper/cookie_store.json.tmp
 /scraper/__pycache__/
 /scraper/*.mp4
 /scraper/*.png
 /scraper/*.html
 /scraper/*.txt
 !/scraper/requirements.txt
-

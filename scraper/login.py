@@ -5,7 +5,8 @@ import re
 
 async def login_to_terabox():
     print("Launching browser...")
-    user_data_dir = os.path.join(os.getcwd(), "browser_session")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    user_data_dir = os.path.join(script_dir, "browser_session")
     
     async with async_playwright() as p:
         # Launch browser in non-headless mode so you can see it and log in
@@ -45,9 +46,9 @@ async def login_to_terabox():
             print("="*60 + "\n")
             
             # Save to local .env file in parent directory if it exists
-            env_path = os.path.join(os.path.dirname(os.getcwd()), ".env")
+            env_path = os.path.join(os.path.dirname(script_dir), ".env")
             if not os.path.exists(env_path):
-                env_path = os.path.join(os.getcwd(), ".env") # Fallback to current dir
+                env_path = os.path.join(script_dir, ".env") # Fallback to scraper dir
                 
             try:
                 if os.path.exists(env_path):

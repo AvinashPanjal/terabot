@@ -2,6 +2,8 @@ import asyncio
 import os
 import re
 import httpx
+import json
+import time
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.request import HTTPXRequest
@@ -23,10 +25,15 @@ socket.getaddrinfo = patched_getaddrinfo
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_ADMIN_ID = os.getenv("TELEGRAM_ADMIN_ID")
 PORT = os.getenv("PORT", "8000")
 API_ENDPOINT = f"http://127.0.0.1:{PORT}/api/extract"
 PUBLIC_URL = os.getenv("RENDER_EXTERNAL_URL") or f"http://localhost:{PORT}"
 MAX_FILE_SIZE = 50000000
+COOKIE_STORE_PATH = os.getenv(
+    "TERABOX_COOKIE_STORE",
+    os.path.join(os.path.dirname(__file__), "cookie_store.json")
+)
 
 # Enforce a 3-minute video duration limit (180 seconds) to ensure lightning-fast downloads
 # and guarantee files fit under Telegram's 50MB bot upload limit.
@@ -35,6 +42,65 @@ TRIM_DURATION = 180
 # Regex to find Terabox domains
 TERABOX_REGEX = r"https?:\/\/(www\.)?(terabox\.com|terabox\.app|teraboxapp\.com|1024tera\.com|nephobox\.com|4funbox\.com|mirrobox\.com|momerybox\.com|teraboxlink\.com|terafileshare\.com|terasharelink\.com|terasharefile\.com|terashare\.link|freeterabox\.com)[^\s]+"
 
+def normalize_ndus(ndus: str | None) -> str | None:
+    if not ndus:
+        return None
+    value = ndus.strip().strip('"').strip("'")
+    match = re.search(r"(?:^|;\s*)ndus=([^;]+)", value)
+    if match:
+        value = match.group(1).strip()
+    return value or None
+
+def is_admin(update: Update) -> bool:
+    if not TELEGRAM_ADMIN_ID or not update.effective_user:
+        return False
+    return str(update.effective_user.id) == str(TELEGRAM_ADMIN_ID).strip()
+
+def mask_cookie(ndus: str) -> str:
+    if len(ndus) <= 12:
+        return "***"
+    return f"{ndus[:6]}...{ndus[-4:]}"
+
+def load_saved_cookie() -> str | None:
+    try:
+        if not os.path.exists(COOKIE_STORE_PATH):
+            return None
+        with open(COOKIE_STORE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return normalize_ndus(data.get("ndus"))
+    except Exception as e:
+        print(f"Failed to read cookie store: {e}")
+        return None
+
+def save_cookie(ndus: str, updated_by: int | None = None):
+    os.makedirs(os.path.dirname(COOKIE_STORE_PATH), exist_ok=True)
+    temp_path = f"{COOKIE_STORE_PATH}.tmp"
+    payload = {
+        "ndus": ndus,
+        "updated_at": int(time.time()),
+        "updated_by": updated_by,
+    }
+    with open(temp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f)
+    os.replace(temp_path, COOKIE_STORE_PATH)
+
+async def check_cookie_valid(ndus: str) -> bool:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Cookie": f"ndus={ndus}",
+        "Referer": "https://www.terabox.app/"
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            for check_url in ("https://www.terabox.app/main", "https://www.1024tera.com/main"):
+                res = await client.get(check_url, headers=headers)
+                final_url = str(res.url).lower()
+                if res.status_code == 200 and "login" not in final_url and "passport" not in final_url:
+                    return True
+    except Exception as e:
+        print(f"Cookie validation failed: {e}")
+    return False
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Welcome to TeraFetch Bot!\n\n"
@@ -42,6 +108,55 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚡ **Fast & Unlimited (Full Video downloading enabled if credentials are configured)**",
         parse_mode="Markdown"
     )
+
+async def setcookie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+    if not TELEGRAM_ADMIN_ID:
+        await update.message.reply_text("Cookie updates are disabled. Set TELEGRAM_ADMIN_ID first.")
+        return
+    if not is_admin(update):
+        await update.message.reply_text("You are not allowed to update the TeraBox cookie.")
+        return
+
+    raw_cookie = " ".join(context.args).strip()
+    ndus = normalize_ndus(raw_cookie)
+    if not ndus:
+        await update.message.reply_text(
+            "Send the command like this:\n"
+            "/setcookie ndus=YOUR_COOKIE_VALUE\n\n"
+            "You can also paste only the raw ndus value."
+        )
+        return
+
+    status_msg = await update.message.reply_text("Checking the cookie with TeraBox...")
+    if not await check_cookie_valid(ndus):
+        await status_msg.edit_text(
+            "That cookie did not validate. Please log in again on your phone/browser and copy a fresh ndus value."
+        )
+        return
+
+    save_cookie(ndus, updated_by=update.effective_user.id if update.effective_user else None)
+    await status_msg.edit_text(
+        f"Saved new TeraBox cookie: {mask_cookie(ndus)}\n"
+        "The extractor will use it on the next download request."
+    )
+
+async def cookie_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+    if not is_admin(update):
+        await update.message.reply_text("You are not allowed to view cookie status.")
+        return
+
+    ndus = load_saved_cookie()
+    if not ndus:
+        await update.message.reply_text("No saved TeraBox cookie found yet.")
+        return
+
+    is_valid = await check_cookie_valid(ndus)
+    status = "valid" if is_valid else "expired or rejected"
+    await update.message.reply_text(f"Saved cookie {mask_cookie(ndus)} is {status}.")
 
 async def process_single_url(url: str, update: Update):
     import uuid
@@ -271,6 +386,8 @@ def main():
         app = Application.builder().token(TELEGRAM_BOT_TOKEN).request(request_config).build()
 
     app.add_handler(CommandHandler("start", start, block=False))
+    app.add_handler(CommandHandler("setcookie", setcookie, block=False))
+    app.add_handler(CommandHandler("cookiestatus", cookie_status, block=False))
     app.add_handler(MessageHandler((filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle_message, block=False))
 
     print("Bot is polling for messages. Press Ctrl+C to stop.")
