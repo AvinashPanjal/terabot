@@ -85,8 +85,11 @@ def save_cookie(ndus: str, updated_by: int | None = None):
     os.replace(temp_path, COOKIE_STORE_PATH)
 
 async def check_cookie_valid(ndus: str) -> bool:
+    ndus = normalize_ndus(ndus)
+    if not ndus:
+        return False
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
         "Cookie": f"ndus={ndus}",
         "Referer": "https://www.terabox.app/"
     }
@@ -97,15 +100,16 @@ async def check_cookie_valid(ndus: str) -> bool:
                 final_url = str(res.url).lower()
                 if res.status_code == 200 and "login" not in final_url and "passport" not in final_url:
                     return True
+                print(f"Cookie validation failed for {check_url}: status={res.status_code}, final_url={final_url}")
     except Exception as e:
-        print(f"Cookie validation failed: {e}")
+        print(f"Cookie validation failed with exception: {e}")
     return False
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Welcome to TeraFetch Bot!\n\n"
         "Send me a TeraBox link (or any of its mirror domains like terasharefile, freeterabox, etc.), and I'll extract, download, and send the video directly into this chat for you.\n\n"
-        "⚡ **Fast & Unlimited (Full Video downloading enabled if credentials are configured)**",
+        "⚡ **Fast & Unlimited (Full Video downloading enabled!)**",
         parse_mode="Markdown"
     )
 
@@ -227,37 +231,7 @@ async def process_single_url(url: str, update: Update):
                 await status_msg.edit_text("❌ Downloaded file was empty or not found.")
                 return
 
-            # Trim the local file to TRIM_DURATION using ffmpeg locally
-            await status_msg.edit_text(f"⏳ Trimming video to {TRIM_DURATION // 60} minutes...")
-            trimmed_filename = temp_filename.replace(".mp4", "_trimmed.mp4")
-            trim_cmd = [
-                'ffmpeg', '-y',
-                '-i', temp_filename,
-                '-t', str(TRIM_DURATION),
-                '-c', 'copy',
-                trimmed_filename
-            ]
-            
-            trim_process = await asyncio.create_subprocess_exec(
-                *trim_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout_t, stderr_t = await trim_process.communicate()
-            
-            if trim_process.returncode == 0 and os.path.exists(trimmed_filename) and os.path.getsize(trimmed_filename) > 0:
-                # Replace the original temp_filename with the trimmed one
-                os.remove(temp_filename)
-                os.rename(trimmed_filename, temp_filename)
-                print("Video successfully trimmed locally.")
-            else:
-                trim_err = stderr_t.decode() if stderr_t else "Unknown error"
-                print(f"Warning: Failed to trim video locally: {trim_err}. Using untrimmed version.")
-                if os.path.exists(trimmed_filename):
-                    try:
-                        os.remove(trimmed_filename)
-                    except:
-                        pass
+            # Full untrimmed video download enabled
                 
             file_size = os.path.getsize(temp_filename)
             if file_size > MAX_FILE_SIZE:
