@@ -123,22 +123,35 @@ async def setcookie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("You are not allowed to update the TeraBox cookie.")
         return
 
-    raw_cookie = " ".join(context.args).strip()
+    args = list(context.args)
+    force = False
+    if args and args[0].lower() == "force":
+        force = True
+        args = args[1:]
+
+    raw_cookie = " ".join(args).strip()
     ndus = normalize_ndus(raw_cookie)
     if not ndus:
         await update.message.reply_text(
             "Send the command like this:\n"
             "/setcookie ndus=YOUR_COOKIE_VALUE\n\n"
-            "You can also paste only the raw ndus value."
+            "If verification is failing but you want to force save it:\n"
+            "/setcookie force ndus=YOUR_COOKIE_VALUE"
         )
         return
 
-    status_msg = await update.message.reply_text("Checking the cookie with TeraBox...")
-    if not await check_cookie_valid(ndus):
-        await status_msg.edit_text(
-            "That cookie did not validate. Please log in again on your phone/browser and copy a fresh ndus value."
-        )
-        return
+    if not force:
+        status_msg = await update.message.reply_text("Checking the cookie with TeraBox...")
+        if not await check_cookie_valid(ndus):
+            await status_msg.edit_text(
+                "❌ That cookie did not validate.\n\n"
+                "If you are sure this cookie is correct and want to bypass this check, send:\n"
+                f"`/setcookie force ndus={ndus}`",
+                parse_mode="Markdown"
+            )
+            return
+    else:
+        status_msg = await update.message.reply_text("Saving cookie (forced verification bypass)...")
 
     save_cookie(ndus, updated_by=update.effective_user.id if update.effective_user else None)
     await status_msg.edit_text(
