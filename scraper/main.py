@@ -436,6 +436,13 @@ async def ensure_active_cookie() -> str | None:
                     HEALTHY_COOKIES.append(new_ndus)
                 return new_ndus
             
+    # 6. Fallback: If everything failed, use the stored or env cookie even if it failed check_cookie_valid()
+    fallback_ndus = stored_ndus or browser_ndus or (HEALTHY_COOKIES[0] if HEALTHY_COOKIES else None)
+    if fallback_ndus:
+        print(f"Fallback: Using unverified cookie ({fallback_ndus[:8]}...) as a last resort.")
+        CURRENT_NDUS = fallback_ndus
+        return CURRENT_NDUS
+        
     print("Warning: No active or valid ndus cookie could be found or refreshed.")
     return None
 
