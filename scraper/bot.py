@@ -54,7 +54,8 @@ def normalize_ndus(ndus: str | None) -> str | None:
 def is_admin(update: Update) -> bool:
     if not TELEGRAM_ADMIN_ID or not update.effective_user:
         return False
-    return str(update.effective_user.id) == str(TELEGRAM_ADMIN_ID).strip()
+    admin_id = str(TELEGRAM_ADMIN_ID).strip().strip('"').strip("'")
+    return str(update.effective_user.id) == admin_id
 
 def mask_cookie(ndus: str) -> str:
     if len(ndus) <= 12:
@@ -116,10 +117,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def setcookie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
         return
+    print(f"Received /setcookie request from user {update.effective_user.id if update.effective_user else None} with args={context.args}")
     if not TELEGRAM_ADMIN_ID:
         await update.message.reply_text("Cookie updates are disabled. Set TELEGRAM_ADMIN_ID first.")
         return
     if not is_admin(update):
+        print(f"Setcookie validation failed: Admin ID is '{TELEGRAM_ADMIN_ID}', user ID is '{update.effective_user.id if update.effective_user else None}'")
         await update.message.reply_text("You are not allowed to update the TeraBox cookie.")
         return
 

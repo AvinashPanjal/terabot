@@ -169,16 +169,17 @@ async def check_cookie_valid(ndus: str) -> bool:
         return False
     try:
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
             "Cookie": f"ndus={ndus}",
             "Referer": "https://www.terabox.app/"
         }
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             for check_url in ("https://www.terabox.app/main", "https://www.1024tera.com/main"):
                 res = await client.get(check_url, headers=headers)
                 final_url = str(res.url).lower()
                 if res.status_code == 200 and "login" not in final_url and "passport" not in final_url:
                     return True
+                print(f"Cookie validation failed for {check_url}: status={res.status_code}, final_url={final_url}")
     except Exception as e:
         print(f"Error checking cookie validity: {safe_str(e)}")
     return False
