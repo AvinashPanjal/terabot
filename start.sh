@@ -22,8 +22,14 @@ if [ -n "$SPACE_HOST" ]; then
     export RENDER_EXTERNAL_URL="https://$SPACE_HOST"
 fi
 
-# Create an empty log file
-touch /tmp/app.log
+# Start Local Telegram Bot API server if credentials are configured and binary exists
+if [ -n "$TELEGRAM_API_ID" ] && [ -n "$TELEGRAM_API_HASH" ] && command -v telegram-bot-api >/dev/null 2>&1; then
+    echo "Starting Local Telegram Bot API Server on port 8081 (Unlocks 2GB upload limit)..." | tee -a /tmp/app.log
+    mkdir -p /tmp/telegram-bot-api
+    telegram-bot-api --api-id="$TELEGRAM_API_ID" --api-hash="$TELEGRAM_API_HASH" --local --dir=/tmp/telegram-bot-api --http-port=8081 >> /tmp/telegram-bot-api.log 2>&1 &
+    export TELEGRAM_LOCAL_API_URL="http://127.0.0.1:8081"
+    sleep 2
+fi
 
 # Start the FastAPI server (extraction API)
 echo "Starting FastAPI Server..." | tee -a /tmp/app.log

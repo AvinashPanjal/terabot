@@ -83,8 +83,9 @@ export default function Home() {
         
         // Trigger native browser download by routing through our own proxy
         // This prevents the browser from blocking Cross-Origin downloads and forces a "Save As"
+        const cookiesParam = data.cookies ? `&cookies=${encodeURIComponent(data.cookies)}` : '';
         const a = document.createElement("a");
-        a.href = `/api/stream?url=${encodeURIComponent(data.directUrl)}`;
+        a.href = `/api/stream?url=${encodeURIComponent(data.directUrl)}${cookiesParam}`;
         a.download = data.filename || "video.mp4";
         document.body.appendChild(a);
         a.click();

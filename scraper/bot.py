@@ -29,7 +29,8 @@ TELEGRAM_ADMIN_ID = os.getenv("TELEGRAM_ADMIN_ID")
 PORT = os.getenv("PORT", "8000")
 API_ENDPOINT = f"http://127.0.0.1:{PORT}/api/extract"
 PUBLIC_URL = os.getenv("RENDER_EXTERNAL_URL") or f"http://localhost:{PORT}"
-MAX_FILE_SIZE = 50000000
+# Set 2GB limit if Local Telegram Bot API Server is configured, otherwise 50MB limit for official Bot API
+MAX_FILE_SIZE = 2000000000 if os.getenv("TELEGRAM_LOCAL_API_URL") else 50000000
 COOKIE_STORE_PATH = os.getenv(
     "TERABOX_COOKIE_STORE",
     os.path.join(os.path.dirname(__file__), "cookie_store.json")
@@ -230,7 +231,8 @@ async def process_single_url(url: str, update: Update):
             )
             
             try:
-                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300.0)
+                # 30-minute timeout for large videos (e.g. 1GB+)
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=1800.0)
                 if process.returncode != 0:
                     error_msg = stderr.decode() if stderr else "Unknown error"
                     await status_msg.edit_text(f"❌ Failed to download the video:\n`{error_msg[-500:]}`", parse_mode="Markdown")
@@ -240,27 +242,33 @@ async def process_single_url(url: str, update: Update):
                     process.kill()
                 except:
                     pass
-                await status_msg.edit_text("❌ Video download timed out after 5 minutes.")
+                await status_msg.edit_text("❌ Video download timed out after 30 minutes.")
                 return
                 
             if not os.path.exists(temp_filename) or os.path.getsize(temp_filename) == 0:
                 await status_msg.edit_text("❌ Downloaded file was empty or not found.")
                 return
 
-            # Full untrimmed video download enabled
+            local_api_url = os.getenv("TELEGRAM_LOCAL_API_URL")
+            max_size_allowed = 2000000000 if local_api_url else 50000000
                 
             file_size = os.path.getsize(temp_filename)
-            if file_size > MAX_FILE_SIZE:
+            if file_size > max_size_allowed:
                 encoded_filename = quote(filename)
-                download_link = f"{PUBLIC_URL}/api/download?local_file={temp_filename}&filename={encoded_filename}"
+                encoded_url = quote(direct_url)
+                encoded_cookies = quote(cookies)
+                player_link = f"{PUBLIC_URL}/player?url={encoded_url}&cookies={encoded_cookies}&filename={encoded_filename}"
+                download_link = f"{PUBLIC_URL}/api/download?url={encoded_url}&cookies={encoded_cookies}&filename={encoded_filename}"
+                limit_mb = max_size_allowed / 1000000
                 await status_msg.edit_text(
-                    f"⚠️ **File is too large to send directly on Telegram ({file_size/1000000:.1f} MB)**\n"
-                    f"Telegram limits bots to sending files under {MAX_FILE_SIZE/1000000:.0f}MB.\n\n"
-                    f"👉 You can stream/play or download it directly:\n"
-                    f"🎥 [Stream & Watch Video]({download_link})\n"
-                    f"📥 [Download Video]({download_link})",
+                    f"⚠️ **File size ({file_size/1000000:.1f} MB) exceeds Telegram bot upload limits ({limit_mb:.0f} MB)**\n\n"
+                    f"👉 You can watch or download it directly in your browser:\n"
+                    f"🎥 [Stream & Watch Video]({player_link})\n"
+                    f"📥 [Direct Download]({download_link})",
                     parse_mode="Markdown"
                 )
+                if os.path.exists(temp_filename):
+                    os.remove(temp_filename)
                 return
             
             await status_msg.edit_text("🚀 Uploading to Telegram...")

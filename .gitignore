@@ -32,6 +32,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -51,3 +52,16 @@ next-env.d.ts
 /scraper/*.html
 /scraper/*.txt
 !/scraper/requirements.txt
+
+# Root diagnostic files and dumps
+*.png
+*.csv
+*.log
+*.part
+*.txt
+*.html
+render_*
+diag_*
+login_page*
+login_session_diag/
+scratch/

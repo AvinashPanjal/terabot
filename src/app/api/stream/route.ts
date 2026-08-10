@@ -4,16 +4,24 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const targetUrl = searchParams.get('url');
+    const cookies = searchParams.get('cookies');
 
     if (!targetUrl) {
       return new NextResponse('Missing url parameter', { status: 400 });
     }
 
+    const reqHeaders: Record<string, string> = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Referer': 'https://www.terabox.app/'
+    };
+
+    if (cookies) {
+      reqHeaders['Cookie'] = cookies;
+    }
+
     // Fetch the file from Terabox
     const response = await fetch(targetUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      }
+      headers: reqHeaders
     });
 
     if (!response.ok) {
