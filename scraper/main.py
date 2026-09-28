@@ -659,7 +659,28 @@ async def extract_url(req: ExtractRequest):
                             direct_url = req_url
             await route.continue_()
 
-        await page.route("**/*", handle_request)
+        api_files_list = []
+        captured_share_id = None
+        captured_uk = None
+
+        async def on_response(response):
+            nonlocal api_files_list, captured_share_id, captured_uk
+            try:
+                res_url = response.url.lower()
+                if any(k in res_url for k in ["share/list", "wap/share/list", "api/list", "shorturlinfo", "share/filelist"]):
+                    res_json = await response.json()
+                    if isinstance(res_json, dict):
+                        if "list" in res_json and isinstance(res_json["list"], list) and len(res_json["list"]) > 0:
+                            api_files_list = res_json["list"]
+                            print(f"[API Intercept] Captured TeraBox folder list with {len(api_files_list)} items!")
+                        if "share_id" in res_json:
+                            captured_share_id = res_json["share_id"]
+                        if "uk" in res_json:
+                            captured_uk = res_json["uk"]
+            except Exception:
+                pass
+
+        page.on("response", on_response)
 
         # Pre-resolve redirects using instant URL rewriting to bypass HTTP bottlenecks
         surl = extract_surl(url)
@@ -677,58 +698,105 @@ async def extract_url(req: ExtractRequest):
             print(f"Playwright error during goto: {e}")
 
         print("Waiting for direct_url interception...")
-        for _ in range(10):
-            if direct_url:
+        for _ in range(12):
+            if direct_url or len(api_files_list) > 1:
                 break
             await page.wait_for_timeout(1000)
-            
+
+        # Fallback element check if video not playing yet
+        if not direct_url and len(api_files_list) <= 1:
+            try:
+                video_el = await page.query_selector("video")
+                if video_el:
+                    v_src = await page.evaluate("() => { const v = document.querySelector('video'); return v ? v.src : null; }")
+                    if v_src and not v_src.startswith("blob"):
+                        direct_url = "https://www.1024tera.com" + v_src if v_src.startswith("/") else v_src
+            except Exception:
+                pass
+
+        if not direct_url and len(api_files_list) <= 1:
+            try:
+                file_row = await page.query_selector('.item, .file-item, .list-item, .grid-item, [data-fid], .file-name, .file-list-row, .wp-s-core-pan-file-list-item, .wp-s-pan-file-list-row')
+                if file_row:
+                    await file_row.click()
+                    await page.wait_for_timeout(2000)
+            except Exception:
+                pass
+
+        if not direct_url and len(api_files_list) <= 1:
+            for _ in range(10):
+                if direct_url:
+                    break
+                v_src = await page.evaluate("() => { const v = document.querySelector('video'); return v ? v.src : null; }")
+                if v_src and not v_src.startswith("blob"):
+                    direct_url = "https://www.1024tera.com" + v_src if v_src.startswith("/") else v_src
+                    break
+                await page.wait_for_timeout(1000)
+
+        if not direct_url and len(api_files_list) <= 1:
+            try:
+                dl_btn = await page.query_selector('a.download-btn, a[title="Download"], button[title="Download"], .download-btn')
+                if dl_btn:
+                    href = await dl_btn.get_attribute("href")
+                    if href and href != "javascript:void(0);":
+                        direct_url = "https://www.1024tera.com" + href if href.startswith("/") else href
+            except Exception:
+                pass
+
         extracted_file_list = []
-        
-        # Check if we are in a multi-file folder or list view
-        try:
-            file_rows = await page.query_selector_all('.file-name, .file-list-row, .wp-s-core-pan-file-list-item, .wp-s-pan-file-list-row')
-            if len(file_rows) > 1:
-                print(f"Multi-file folder detected! Found {len(file_rows)} items in folder.")
-                for idx, row in enumerate(file_rows[:15]): # Limit to top 15 files per folder share link
-                    try:
+
+        # Process folder list if TeraBox API list was captured
+        if len(api_files_list) > 1:
+            print(f"Processing {len(api_files_list)} items from API list...")
+            for idx, item in enumerate(api_files_list[:20]):
+                item_name = item.get("server_filename") or item.get("filename") or item.get("path") or f"video_{idx+1}.mp4"
+                item_name = os.path.basename(item_name)
+                if not item_name.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv')):
+                    item_name += ".mp4"
+                
+                fs_id = item.get("fs_id")
+                item_url = None
+                
+                if direct_url and fs_id:
+                    if "fs_id=" in direct_url:
+                        item_url = re.sub(r"fs_id=\d+", f"fs_id={fs_id}", direct_url)
+                    elif "fid=" in direct_url:
+                        item_url = re.sub(r"fid=\d+", f"fid={fs_id}", direct_url)
+
+                if not item_url and fs_id and surl:
+                    item_url = f"https://www.1024tera.com/api/download?surl={surl}&fs_id={fs_id}"
+
+                if not item_url and direct_url:
+                    item_url = direct_url
+
+                if item_url:
+                    extracted_file_list.append({"directUrl": item_url, "filename": item_name})
+
+        # Check DOM list elements as fallback for folder links
+        if not extracted_file_list:
+            try:
+                file_rows = await page.query_selector_all('.item, .file-item, .list-item, .grid-item, [data-fid], .file-name, .file-list-row, .wp-s-core-pan-file-list-item, .wp-s-pan-file-list-row')
+                if len(file_rows) > 1:
+                    print(f"DOM folder list detected! Found {len(file_rows)} rows.")
+                    for idx, row in enumerate(file_rows[:15]):
                         row_name = await row.inner_text()
                         row_name = row_name.strip().split('\n')[0] if row_name else f"video_{idx+1}.mp4"
                         if not row_name.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv')):
                             row_name += ".mp4"
-                        
-                        # Reset direct_url for each item extraction attempt
-                        temp_direct_url = None
-                        
-                        async def item_request_handler(route, request):
-                            nonlocal temp_direct_url
-                            req_url = request.url
-                            keywords = ["api/download", "type=d", ".m3u8", "type=m3u8", "sharing", "pcs.baidu.com", "share/streaming"]
-                            valid_domains = ["terabox", "baidupcs", "freeterabox", "baidu.com", "pcs.", "teraboxcdn", "1024tera", "terashare", "nephobox", "4funbox", "mirrobox", "momerybox"]
-                            if any(kw in req_url.lower() for kw in keywords):
-                                parsed_host = urlparse(req_url).hostname or ""
-                                if any(dom in parsed_host.lower() for dom in valid_domains):
-                                    if "thumbnail" not in req_url.lower() and "favicon" not in req_url.lower():
-                                        if not temp_direct_url:
-                                            temp_direct_url = req_url
-                            await route.continue_()
+                        fid = await row.get_attribute("data-fid") or await row.get_attribute("data-fs-id")
+                        item_url = None
+                        if direct_url and fid:
+                            item_url = re.sub(r"fs_id=\d+", f"fs_id={fid}", direct_url)
+                        if not item_url and surl and fid:
+                            item_url = f"https://www.1024tera.com/api/download?surl={surl}&fs_id={fid}"
+                        if not item_url and direct_url:
+                            item_url = direct_url
+                        if item_url:
+                            extracted_file_list.append({"directUrl": item_url, "filename": row_name})
+            except Exception as dom_err:
+                print(f"DOM folder scan error: {dom_err}")
 
-                        await row.click()
-                        await page.wait_for_timeout(1500)
-                        
-                        # Check video element or intercepted url
-                        if not temp_direct_url:
-                            v_src = await page.evaluate("() => { const v = document.querySelector('video'); return v ? v.src : null; }")
-                            if v_src and not v_src.startswith("blob"):
-                                temp_direct_url = "https://www.1024tera.com" + v_src if v_src.startswith("/") else v_src
-
-                        if temp_direct_url:
-                            extracted_file_list.append({"directUrl": temp_direct_url, "filename": row_name})
-                    except Exception as row_err:
-                        print(f"Error processing folder item {idx+1}: {row_err}")
-        except Exception as folder_err:
-            print(f"Folder detection log: {folder_err}")
-
-        # Fallback to single direct_url if folder iteration didn't populate items
+        # Fallback to single direct_url if folder scanning didn't produce multiple items
         if not extracted_file_list and direct_url:
             extracted_file_list.append({"directUrl": direct_url, "filename": filename})
 
