@@ -324,6 +324,11 @@ async def process_single_url(url: str, update: Update):
                             file_index=idx+1,
                             total_files=len(file_list)
                         )
+                # Auto-delete the original user message containing the link
+                try:
+                    await update.message.delete()
+                except Exception:
+                    pass
                 return
 
             direct_url = data.get("directUrl")
@@ -340,6 +345,12 @@ async def process_single_url(url: str, update: Update):
                 update=update,
                 status_msg=status_msg
             )
+            
+            # Auto-delete the original user message containing the link
+            try:
+                await update.message.delete()
+            except Exception:
+                pass
 
     except Exception as e:
         try:
