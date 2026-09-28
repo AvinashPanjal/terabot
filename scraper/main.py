@@ -748,7 +748,7 @@ async def extract_url(req: ExtractRequest):
         # Process folder list if TeraBox API list was captured
         if len(api_files_list) > 1:
             print(f"Processing {len(api_files_list)} items from API list...")
-            for idx, item in enumerate(api_files_list[:20]):
+            for idx, item in enumerate(api_files_list[:15]):
                 item_name = item.get("server_filename") or item.get("filename") or item.get("path") or f"video_{idx+1}.mp4"
                 item_name = os.path.basename(item_name)
                 if not item_name.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv')):
@@ -756,18 +756,54 @@ async def extract_url(req: ExtractRequest):
                 
                 fs_id = item.get("fs_id")
                 item_url = None
-                
-                if direct_url and fs_id:
-                    if "fs_id=" in direct_url:
-                        item_url = re.sub(r"fs_id=\d+", f"fs_id={fs_id}", direct_url)
-                    elif "fid=" in direct_url:
-                        item_url = re.sub(r"fid=\d+", f"fid={fs_id}", direct_url)
+
+                # Method 1: Resolve the exact signed media URL by opening a lightweight Playwright tab for this fs_id
+                if fs_id and surl:
+                    try:
+                        item_page = await browser_context.new_page()
+                        
+                        async def item_route_handler(route, request):
+                            nonlocal item_url
+                            req_url = request.url
+                            keywords = ["api/download", "type=d", ".m3u8", "type=m3u8", "pcs.baidu.com", "share/streaming"]
+                            valid_domains = ["terabox", "baidupcs", "freeterabox", "baidu.com", "pcs.", "teraboxcdn", "1024tera", "terashare", "nephobox", "4funbox"]
+                            if any(kw in req_url.lower() for kw in keywords):
+                                parsed_host = urlparse(req_url).hostname or ""
+                                if any(dom in parsed_host.lower() for dom in valid_domains):
+                                    if "thumbnail" not in req_url.lower() and "favicon" not in req_url.lower():
+                                        if not item_url:
+                                            item_url = req_url
+                            await route.continue_()
+
+                        await item_page.route("**/*", item_route_handler)
+                        item_target = f"https://www.1024tera.com/sharing/link?surl={surl}&fs_id={fs_id}"
+                        print(f"Resolving item {idx+1}/{len(api_files_list)} (fs_id={fs_id}) -> {item_target}")
+                        
+                        try:
+                            await item_page.goto(item_target, wait_until="domcontentloaded", timeout=12000)
+                        except Exception:
+                            pass
+
+                        for _ in range(5):
+                            if item_url:
+                                break
+                            await item_page.wait_for_timeout(1000)
+
+                        if not item_url:
+                            v_src = await item_page.evaluate("() => { const v = document.querySelector('video'); return v ? v.src : null; }")
+                            if v_src and not v_src.startswith("blob"):
+                                item_url = "https://www.1024tera.com" + v_src if v_src.startswith("/") else v_src
+
+                        await item_page.close()
+                    except Exception as tab_err:
+                        print(f"Tab resolution error for item {idx+1}: {tab_err}")
+
+                # Method 2: Fallback to TeraBox share/streaming m3u8 or api/download URL
+                if not item_url and captured_uk and captured_share_id and fs_id:
+                    item_url = f"https://www.1024tera.com/share/streaming?uk={captured_uk}&shareid={captured_share_id}&fs_id={fs_id}&type=m3u8"
 
                 if not item_url and fs_id and surl:
                     item_url = f"https://www.1024tera.com/api/download?surl={surl}&fs_id={fs_id}"
-
-                if not item_url and direct_url:
-                    item_url = direct_url
 
                 if item_url:
                     extracted_file_list.append({"directUrl": item_url, "filename": item_name})
@@ -785,9 +821,7 @@ async def extract_url(req: ExtractRequest):
                             row_name += ".mp4"
                         fid = await row.get_attribute("data-fid") or await row.get_attribute("data-fs-id")
                         item_url = None
-                        if direct_url and fid:
-                            item_url = re.sub(r"fs_id=\d+", f"fs_id={fid}", direct_url)
-                        if not item_url and surl and fid:
+                        if surl and fid:
                             item_url = f"https://www.1024tera.com/api/download?surl={surl}&fs_id={fid}"
                         if not item_url and direct_url:
                             item_url = direct_url

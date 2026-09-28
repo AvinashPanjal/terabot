@@ -257,7 +257,6 @@ async def download_and_send_video(direct_url: str, filename: str, cookies: str, 
             try:
                 await update.message.reply_video(
                     video=abs_filepath,
-                    caption=f"🎥 {filename}",
                     write_timeout=300,
                     read_timeout=300
                 )
@@ -266,7 +265,6 @@ async def download_and_send_video(direct_url: str, filename: str, cookies: str, 
                 with open(temp_filename, "rb") as video_file:
                     await update.message.reply_video(
                         video=video_file,
-                        caption=f"🎥 {filename}",
                         write_timeout=300,
                         read_timeout=300
                     )
@@ -274,7 +272,6 @@ async def download_and_send_video(direct_url: str, filename: str, cookies: str, 
             with open(temp_filename, "rb") as video_file:
                 await update.message.reply_video(
                     video=video_file,
-                    caption=f"🎥 {filename}",
                     write_timeout=300,
                     read_timeout=300
                 )
