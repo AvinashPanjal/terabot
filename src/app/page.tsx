@@ -78,7 +78,27 @@ export default function Home() {
         throw new Error(data.error || "Failed to fetch download link");
       }
 
-      if (data.directUrl) {
+      if (data.fileList && data.fileList.length > 1) {
+        updateItem(item.id, { 
+          status: "downloading", 
+          progress: 50, 
+          filename: `${data.fileList[0].filename} (+ ${data.fileList.length - 1} more in folder)` 
+        });
+
+        const cookiesParam = data.cookies ? `&cookies=${encodeURIComponent(data.cookies)}` : '';
+        data.fileList.forEach((fileItem: { directUrl: string; filename: string }, index: number) => {
+          setTimeout(() => {
+            const a = document.createElement("a");
+            a.href = `/api/stream?url=${encodeURIComponent(fileItem.directUrl)}${cookiesParam}`;
+            a.download = fileItem.filename || `video_${index + 1}.mp4`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          }, index * 1000);
+        });
+
+        updateItem(item.id, { status: "completed", progress: 100 });
+      } else if (data.directUrl) {
         updateItem(item.id, { status: "downloading", progress: 50, filename: data.filename || "video.mp4" });
         
         // Trigger native browser download by routing through our own proxy

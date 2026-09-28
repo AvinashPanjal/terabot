@@ -682,110 +682,55 @@ async def extract_url(req: ExtractRequest):
                 break
             await page.wait_for_timeout(1000)
             
-        if not direct_url:
-            print("No direct_url yet. Checking if we are in file list view...")
-            try:
-                file_row = await page.wait_for_selector('.file-name, .file-list-row, .wp-s-core-pan-file-list-item, .wp-s-pan-file-list-row', timeout=5000)
-                if file_row:
-                    print("Found file list row. Clicking it to open video player...")
-                    await file_row.click()
-                    await page.wait_for_timeout(2000)
-            except Exception:
-                print("Did not find file list row.")
-
-        if not direct_url:
-            print("Checking for video element...")
-            try:
-                await page.wait_for_selector("video", timeout=10000)
-                print("Video element found! Forcing play and removing dialog blocks...")
-                
-                # Active background task to remove any overlays/popups and play video
-                async def keep_playing():
-                    for _ in range(10):
-                        if direct_url:
-                            break
-                        await asyncio.sleep(1.5)
-                        try:
-                            await page.evaluate("""() => {
-                                // Delete/hide any overlay blocks, login dialogs, and masks
-                                const classesToHide = ['login', 'modal', 'dialog', 'popup', 'overlay', 'mask', 'passport'];
-                                document.querySelectorAll('*').forEach(el => {
-                                    if (el && el.className && typeof el.className === 'string') {
-                                        if (classesToHide.some(cls => el.className.toLowerCase().includes(cls))) {
-                                            if (!el.contains(document.querySelector('video'))) {
-                                                el.style.setProperty('display', 'none', 'important');
-                                            }
-                                        }
-                                    }
-                                    if (el && el.id && typeof el.id === 'string') {
-                                        if (classesToHide.some(cls => el.id.toLowerCase().includes(cls))) {
-                                            if (!el.contains(document.querySelector('video'))) {
-                                                el.style.setProperty('display', 'none', 'important');
-                                            }
-                                        }
-                                    }
-                                });
-                                
-                                // Force unmute and play the video element
-                                const v = document.querySelector('video');
-                                if (v) {
-                                    v.muted = true;
-                                    v.play().catch(() => {});
-                                }
-                            }""")
-                        except:
-                            pass
-                
-                asyncio.create_task(keep_playing())
-                
-                # Check for direct URL
-                for _ in range(15):
-                    if direct_url:
-                        break
-                    # Re-check src attribute if it changed dynamically
-                    video_src = await page.evaluate("() => { const v = document.querySelector('video'); return v ? v.src : null; }")
-                    if video_src and not video_src.startswith("blob"):
-                        if video_src.startswith("/"):
-                            video_src = "https://www.1024tera.com" + video_src
-                        if video_src.startswith("http"):
-                            print(f"Captured direct URL dynamically from video src: {video_src}")
-                            direct_url = video_src
-                            break
-                    await page.wait_for_timeout(1000)
-            except Exception as e:
-                print(f"Video element error or timeout: {e}")
-
-        if not direct_url:
-            print("Checking for Download button as fallback...")
-            try:
-                dl_btn = await page.wait_for_selector('a.download-btn, a[title="Download"], button[title="Download"], .download-btn', timeout=4000)
-                if dl_btn:
-                    print("Found download button! Clicking...")
-                    try:
-                        async with page.expect_download(timeout=6000) as download_info:
-                            await dl_btn.click()
-                        download = await download_info.value
-                        direct_url = download.url
-                    except Exception:
-                        href = await dl_btn.get_attribute("href")
-                        if href and href != "javascript:void(0);":
-                            direct_url = href
-                        else:
-                            await dl_btn.click()
-                            await page.wait_for_timeout(2000)
-            except Exception:
-                print("Download button not found.")
+        extracted_file_list = []
         
-        if direct_url and direct_url.startswith("/"):
-            direct_url = "https://www.1024tera.com" + direct_url
-            
-        if not direct_url:
-            try:
-                err_screenshot = os.path.join(os.path.dirname(__file__), "extract_error.png")
-                await page.screenshot(path=err_screenshot)
-                print(f"Extraction failed. Saved screenshot to {err_screenshot}")
-            except Exception as e_screenshot:
-                print(f"Failed to capture extraction error screenshot: {e_screenshot}")
+        # Check if we are in a multi-file folder or list view
+        try:
+            file_rows = await page.query_selector_all('.file-name, .file-list-row, .wp-s-core-pan-file-list-item, .wp-s-pan-file-list-row')
+            if len(file_rows) > 1:
+                print(f"Multi-file folder detected! Found {len(file_rows)} items in folder.")
+                for idx, row in enumerate(file_rows[:15]): # Limit to top 15 files per folder share link
+                    try:
+                        row_name = await row.inner_text()
+                        row_name = row_name.strip().split('\n')[0] if row_name else f"video_{idx+1}.mp4"
+                        if not row_name.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm', '.flv')):
+                            row_name += ".mp4"
+                        
+                        # Reset direct_url for each item extraction attempt
+                        temp_direct_url = None
+                        
+                        async def item_request_handler(route, request):
+                            nonlocal temp_direct_url
+                            req_url = request.url
+                            keywords = ["api/download", "type=d", ".m3u8", "type=m3u8", "sharing", "pcs.baidu.com", "share/streaming"]
+                            valid_domains = ["terabox", "baidupcs", "freeterabox", "baidu.com", "pcs.", "teraboxcdn", "1024tera", "terashare", "nephobox", "4funbox", "mirrobox", "momerybox"]
+                            if any(kw in req_url.lower() for kw in keywords):
+                                parsed_host = urlparse(req_url).hostname or ""
+                                if any(dom in parsed_host.lower() for dom in valid_domains):
+                                    if "thumbnail" not in req_url.lower() and "favicon" not in req_url.lower():
+                                        if not temp_direct_url:
+                                            temp_direct_url = req_url
+                            await route.continue_()
+
+                        await row.click()
+                        await page.wait_for_timeout(1500)
+                        
+                        # Check video element or intercepted url
+                        if not temp_direct_url:
+                            v_src = await page.evaluate("() => { const v = document.querySelector('video'); return v ? v.src : null; }")
+                            if v_src and not v_src.startswith("blob"):
+                                temp_direct_url = "https://www.1024tera.com" + v_src if v_src.startswith("/") else v_src
+
+                        if temp_direct_url:
+                            extracted_file_list.append({"directUrl": temp_direct_url, "filename": row_name})
+                    except Exception as row_err:
+                        print(f"Error processing folder item {idx+1}: {row_err}")
+        except Exception as folder_err:
+            print(f"Folder detection log: {folder_err}")
+
+        # Fallback to single direct_url if folder iteration didn't populate items
+        if not extracted_file_list and direct_url:
+            extracted_file_list.append({"directUrl": direct_url, "filename": filename})
 
         cookies = await browser_context.cookies()
         cookie_string = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
@@ -798,14 +743,19 @@ async def extract_url(req: ExtractRequest):
     finally:
         playwright_semaphore.release()
 
-    if not direct_url:
+    if not extracted_file_list and not direct_url:
         raise HTTPException(status_code=404, detail="Could not extract direct download URL from TeraBox link.")
+
+    first_item = extracted_file_list[0] if extracted_file_list else {"directUrl": direct_url, "filename": filename}
+    is_folder = len(extracted_file_list) > 1
 
     return {
         "success": True,
-        "directUrl": direct_url,
-        "filename": filename,
-        "cookies": cookie_string
+        "directUrl": first_item.get("directUrl"),
+        "filename": first_item.get("filename", "video.mp4"),
+        "cookies": cookie_string,
+        "isFolder": is_folder,
+        "fileList": extracted_file_list
     }
 
 @app.get("/logs", response_class=HTMLResponse)

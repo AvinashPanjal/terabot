@@ -34,6 +34,9 @@ export async function POST(request: Request) {
       success: true,
       directUrl: data.directUrl,
       filename: data.filename || 'video.mp4',
+      cookies: data.cookies || '',
+      isFolder: data.isFolder || false,
+      fileList: data.fileList || [],
     });
 
   } catch (error: any) {

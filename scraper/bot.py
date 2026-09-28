@@ -179,13 +179,121 @@ async def cookie_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status = "valid" if is_valid else "expired or rejected"
     await update.message.reply_text(f"Saved cookie {mask_cookie(ndus)} is {status}.")
 
-async def process_single_url(url: str, update: Update):
+async def download_and_send_video(direct_url: str, filename: str, cookies: str, update: Update, status_msg=None, file_index=None, total_files=None):
     import uuid
     task_id = str(uuid.uuid4())[:8]
     temp_filename = f"/tmp/temp_{update.message.message_id}_{task_id}.mp4"
+    prefix = f"[{file_index}/{total_files}] " if (file_index and total_files) else ""
     
     try:
-        status_msg = await update.message.reply_text(f"🔍 Extracting video from link: {url}\nThis might take up to 20 seconds...")
+        if status_msg is None:
+            status_msg = await update.message.reply_text(f"⏳ {prefix}Downloading {filename}...")
+        else:
+            await status_msg.edit_text(f"⏳ {prefix}Downloading {filename}... (Speed Boost Active)")
+
+        cmd = [
+            'yt-dlp', direct_url,
+            '--add-header', 'Referer: https://www.terabox.app/',
+        ]
+        if cookies:
+            cmd += ['--add-header', f'Cookie: {cookies}']
+        
+        cmd += [
+            '--concurrent-fragments', '8',
+            '-o', temp_filename
+        ]
+        
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=1800.0)
+            if process.returncode != 0:
+                error_msg = stderr.decode() if stderr else "Unknown error"
+                await status_msg.edit_text(f"❌ {prefix}Failed to download:\n`{error_msg[-300:]}`", parse_mode="Markdown")
+                return
+        except asyncio.TimeoutError:
+            try:
+                process.kill()
+            except:
+                pass
+            await status_msg.edit_text(f"❌ {prefix}Download timed out.")
+            return
+            
+        if not os.path.exists(temp_filename) or os.path.getsize(temp_filename) == 0:
+            await status_msg.edit_text(f"❌ {prefix}Downloaded file was empty or not found.")
+            return
+
+        local_api_url = os.getenv("TELEGRAM_LOCAL_API_URL")
+        max_size_allowed = 2000000000 if local_api_url else 50000000
+            
+        file_size = os.path.getsize(temp_filename)
+        if file_size > max_size_allowed:
+            encoded_filename = quote(filename)
+            encoded_url = quote(direct_url)
+            encoded_cookies = quote(cookies)
+            player_link = f"{PUBLIC_URL}/player?url={encoded_url}&cookies={encoded_cookies}&filename={encoded_filename}"
+            download_link = f"{PUBLIC_URL}/api/download?url={encoded_url}&cookies={encoded_cookies}&filename={encoded_filename}"
+            limit_mb = max_size_allowed / 1000000
+            await status_msg.edit_text(
+                f"⚠️ **{prefix}File size ({file_size/1000000:.1f} MB) exceeds Telegram bot upload limits ({limit_mb:.0f} MB)**\n\n"
+                f"👉 You can watch or download it directly in your browser:\n"
+                f"🎥 [Stream & Watch Video]({player_link})\n"
+                f"📥 [Direct Download]({download_link})",
+                parse_mode="Markdown"
+            )
+            if os.path.exists(temp_filename):
+                os.remove(temp_filename)
+            return
+        
+        await status_msg.edit_text(f"🚀 {prefix}Uploading to Telegram...")
+
+        abs_filepath = os.path.abspath(temp_filename)
+        
+        if local_api_url:
+            try:
+                await update.message.reply_video(
+                    video=abs_filepath,
+                    caption=f"🎥 {filename}",
+                    write_timeout=300,
+                    read_timeout=300
+                )
+            except Exception as local_err:
+                print(f"Local file sending failed: {local_err}. Trying direct upload...")
+                with open(temp_filename, "rb") as video_file:
+                    await update.message.reply_video(
+                        video=video_file,
+                        caption=f"🎥 {filename}",
+                        write_timeout=300,
+                        read_timeout=300
+                    )
+        else:
+            with open(temp_filename, "rb") as video_file:
+                await update.message.reply_video(
+                    video=video_file,
+                    caption=f"🎥 {filename}",
+                    write_timeout=300,
+                    read_timeout=300
+                )
+        
+        await status_msg.delete()
+        if os.path.exists(temp_filename):
+            os.remove(temp_filename)
+
+    except Exception as e:
+        print(f"Error in download_and_send_video: {e}")
+        if os.path.exists(temp_filename):
+            try:
+                os.remove(temp_filename)
+            except:
+                pass
+
+async def process_single_url(url: str, update: Update):
+    try:
+        status_msg = await update.message.reply_text(f"🔍 Extracting link: {url}\nThis might take up to 20 seconds...")
     except Exception as e:
         print(f"Failed to send initial status message for {url}: {e}")
         return
@@ -201,111 +309,40 @@ async def process_single_url(url: str, update: Update):
                 return
             
             data = res.json()
+            cookies = data.get("cookies", "")
+            file_list = data.get("fileList") or []
+            is_folder = data.get("isFolder", False) or len(file_list) > 1
+
+            if is_folder and len(file_list) > 1:
+                await status_msg.edit_text(f"📁 **Folder Link Detected!**\nFound **{len(file_list)} videos** in this folder. Downloading each video separately...")
+                for idx, item in enumerate(file_list):
+                    item_url = item.get("directUrl")
+                    item_name = item.get("filename") or f"video_{idx+1}.mp4"
+                    if item_url:
+                        await download_and_send_video(
+                            direct_url=item_url,
+                            filename=item_name,
+                            cookies=cookies,
+                            update=update,
+                            file_index=idx+1,
+                            total_files=len(file_list)
+                        )
+                return
+
             direct_url = data.get("directUrl")
             filename = data.get("filename", "video.mp4")
-            cookies = data.get("cookies", "")
 
             if not direct_url:
                 await status_msg.edit_text("❌ Could not find a valid video stream in that link.")
                 return
 
-            await status_msg.edit_text("⏳ Downloading video stream... (Speed Boost Active)")
-
-            # Use yt-dlp to download the stream/video file natively
-            cmd = [
-                'yt-dlp', direct_url,
-                '--add-header', 'Referer: https://www.terabox.app/',
-            ]
-            if cookies:
-                cmd += ['--add-header', f'Cookie: {cookies}']
-            
-            cmd += [
-                '--concurrent-fragments', '8',
-                '-o', temp_filename
-            ]
-            
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+            await download_and_send_video(
+                direct_url=direct_url,
+                filename=filename,
+                cookies=cookies,
+                update=update,
+                status_msg=status_msg
             )
-            
-            try:
-                # 30-minute timeout for large videos (e.g. 1GB+)
-                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=1800.0)
-                if process.returncode != 0:
-                    error_msg = stderr.decode() if stderr else "Unknown error"
-                    await status_msg.edit_text(f"❌ Failed to download the video:\n`{error_msg[-500:]}`", parse_mode="Markdown")
-                    return
-            except asyncio.TimeoutError:
-                try:
-                    process.kill()
-                except:
-                    pass
-                await status_msg.edit_text("❌ Video download timed out after 30 minutes.")
-                return
-                
-            if not os.path.exists(temp_filename) or os.path.getsize(temp_filename) == 0:
-                await status_msg.edit_text("❌ Downloaded file was empty or not found.")
-                return
-
-            local_api_url = os.getenv("TELEGRAM_LOCAL_API_URL")
-            max_size_allowed = 2000000000 if local_api_url else 50000000
-                
-            file_size = os.path.getsize(temp_filename)
-            if file_size > max_size_allowed:
-                encoded_filename = quote(filename)
-                encoded_url = quote(direct_url)
-                encoded_cookies = quote(cookies)
-                player_link = f"{PUBLIC_URL}/player?url={encoded_url}&cookies={encoded_cookies}&filename={encoded_filename}"
-                download_link = f"{PUBLIC_URL}/api/download?url={encoded_url}&cookies={encoded_cookies}&filename={encoded_filename}"
-                limit_mb = max_size_allowed / 1000000
-                await status_msg.edit_text(
-                    f"⚠️ **File size ({file_size/1000000:.1f} MB) exceeds Telegram bot upload limits ({limit_mb:.0f} MB)**\n\n"
-                    f"👉 You can watch or download it directly in your browser:\n"
-                    f"🎥 [Stream & Watch Video]({player_link})\n"
-                    f"📥 [Direct Download]({download_link})",
-                    parse_mode="Markdown"
-                )
-                if os.path.exists(temp_filename):
-                    os.remove(temp_filename)
-                return
-            
-            await status_msg.edit_text("🚀 Uploading to Telegram...")
-
-            abs_filepath = os.path.abspath(temp_filename)
-            local_api_url = os.getenv("TELEGRAM_LOCAL_API_URL")
-            
-            if local_api_url:
-                try:
-                    await update.message.reply_video(
-                        video=abs_filepath,
-                        write_timeout=300,
-                        read_timeout=300
-                    )
-                except Exception as local_err:
-                    print(f"Local file sending failed: {local_err}. Trying direct upload...")
-                    with open(temp_filename, "rb") as video_file:
-                        await update.message.reply_video(
-                            video=video_file,
-                            write_timeout=300,
-                            read_timeout=300
-                        )
-            else:
-                with open(temp_filename, "rb") as video_file:
-                    await update.message.reply_video(
-                        video=video_file,
-                        write_timeout=300,
-                        read_timeout=300
-                    )
-            
-            await status_msg.delete()
-            try:
-                await update.message.delete()
-            except Exception:
-                pass
-            if os.path.exists(temp_filename):
-                os.remove(temp_filename)
 
     except Exception as e:
         try:
